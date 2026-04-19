@@ -10,6 +10,7 @@ use crate::{data::page::PageDataLayout, database::{seq_access::{SeqAccess, SeqAc
 // TODO: define constants for system catalog
 // Not a good solution for NULL, but very simple for now (see comment in btree module)
 pub const NULL_INT: i32 = i32::MIN;
+// Page size should not be smaller than 512 bytes, where the FSM implementation needs at least 256
 pub const PAGE_SIZE: u16 = 4096;
 
 
