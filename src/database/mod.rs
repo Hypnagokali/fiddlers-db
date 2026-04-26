@@ -5,7 +5,7 @@ use std::{cell::RefCell, fs::create_dir, num::ParseIntError, path::Path};
 
 use thiserror::Error;
 
-use crate::{data::page::PageDataLayout, database::{seq_access::{SeqAccess, SeqAccessError}, table_access::{TableAccess, TableAccessError}}, store::{Store, StoreError, file_store::FileStore}, table::{Column, ColumnType, TableSchema, table::{Cell, Row, Table}}, tree::store::BTreeStore};
+use crate::{data::page::PageDataLayout, database::{seq_access::{SeqAccess, SeqAccessError}, table_access::{TableAccess, TableAccessError}}, fsm::fsm::Fsm, store::{Store, StoreError, file_store::FileStore}, table::{Column, ColumnType, TableSchema, table::{Cell, Row, Table}}, tree::store::BTreeStore};
 
 // TODO: define constants for system catalog
 // Not a good solution for NULL, but very simple for now (see comment in btree module)
@@ -685,8 +685,15 @@ impl<S: Store> Database<S> {
         let new_table = Table::new(tbl_id, name.to_owned(), schema);
         
         self.store.create(&self.layout, &new_table)?;
+        self.create_fsm(&new_table)?;
 
         Ok(new_table)
+    }
+
+    fn create_fsm(&self, table: &Table) -> Result<(), CreateTableError> {
+        let fsm_access = Fsm::access(&table);
+        self.store.create(&self.layout, &fsm_access)?;
+        Ok(())
     }
 }
 
