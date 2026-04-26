@@ -80,7 +80,6 @@ impl BinaryTree {
         tree
     }
 
-
     pub fn serialize(self) -> Vec<u8> {
         self.arr
     }
@@ -171,6 +170,12 @@ impl BinaryTree {
     fn is_leaf_node(&self, index: usize) -> bool {
         // >= because of the mapping from count to index
         index >= self.non_leaf_nodes
+    }
+
+    #[cfg(test)]
+    pub fn debug(&self) {
+        let max_val = self.arr.iter().max().unwrap_or(&0);
+        println!("Tree has max value: {}", max_val);
     }
 }
 

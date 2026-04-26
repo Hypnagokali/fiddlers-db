@@ -166,6 +166,7 @@ impl<'db, S: Store> Fsm<'db, S> {
             );
 
             let slot = fsm_tree.find_available(cat);
+            
             if let Some(slot) = slot {
                 if addr.level == 0 {
                     // bottom level, find heap page
@@ -592,6 +593,9 @@ mod tests {
         // has been init with 512 / 2 - 1 => 255 (non leaf nodes) => 236 slots
         assert_eq!(fsm.slots, 236);
         assert_eq!(meta_fsm.next_id(), 5); // full height is 4 nodes, next page will have id = 5;
+
+        // update tree
+        fsm.update(&page);
         
         // a second request should not allocate new pages:
         let page = fsm.find_available_page(200);
