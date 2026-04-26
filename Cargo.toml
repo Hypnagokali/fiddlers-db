@@ -9,3 +9,4 @@ tempfile = "3"
 derive-getters = "0.5.0"
 # temporary use of a very simple cache library:
 ttl_cache = "0.5.1"
+rand = "0.8"

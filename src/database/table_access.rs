@@ -2,9 +2,9 @@ use std::{cell::RefCell, collections::HashMap};
 
 use thiserror::Error;
 
-use crate::{data::page::{PageDataLayout, PageError, Record}, store::{IndexedRowIterator, PageIterator, PageRowIterator, Store}, table::{Column, TableSchema, table::{Cell, Row, RowValidationError, Table}}, tree::store::BTreeStore};
+use crate::{data::page::{PageDataLayout, PageError, Record}, fsm::fsm::Fsm, store::{IndexedRowIterator, PageIterator, PageRowIterator, Store}, table::{Column, TableSchema, table::{Cell, Row, RowValidationError, Table}}, tree::store::BTreeStore};
 
-pub struct TableAccess<'db, S: ?Sized> {
+pub struct TableAccess<'db, S> {
     table: Table,
     // Having BTreeStore as a normal ref would fore TableAccess to be mutable everywhere
     indexed_columns: Vec<(i32, RefCell<BTreeStore>)>,
@@ -233,11 +233,8 @@ impl<'db, S: Store> TableAccess<'db, S> {
          }
     }
 
-    /// Drop the table by deleting its underlying file
-    pub fn drop(&self) -> Result<(), TableAccessError> {
-        unimplemented!()
-        // std::fs::remove_file(&self.table.file_path())?;
-        // Ok(())
+    fn fsm(&self) -> Fsm<'_, S> {
+        Fsm::new(self.store, self.layout, &self.table)
     }
 
     /// Load all rows from all pages in the table
@@ -306,6 +303,8 @@ impl<'db, S: Store> TableAccess<'db, S> {
 
                 self.store.write_page(self.layout, &page, &self.table)
                     .map_err(|e| TableAccessError::DeleteRowsError(e.to_string()))?;
+
+                self.fsm().update(&page);
             }
         }
 
@@ -399,6 +398,8 @@ impl<'db, S: Store> TableAccess<'db, S> {
                 for (record, updated_row, update_index_cmd) in updated_rows {
                     page.delete_record(*record.record_index());
                     let row_data = updated_row.serialize();
+                    // If it's possible to insert into same page, than do it:
+                    // if not insert into another page later
                     if page.can_insert(&row_data) {
                         let slot_id = page.insert_record(row_data)?;
                     
@@ -409,7 +410,9 @@ impl<'db, S: Store> TableAccess<'db, S> {
                     }
 
                     self.store.write_page(self.layout, &page, &self.table)
-                        .map_err(|_| TableAccessError::UpdateRowsError("Reinsert update error: cannot write page".to_string()))?
+                        .map_err(|_| TableAccessError::UpdateRowsError("Reinsert update error: cannot write page".to_string()))?;
+                    
+                    self.fsm().update(&page);
                 }
             } else {
                 // easy peasy in place update
@@ -420,6 +423,8 @@ impl<'db, S: Store> TableAccess<'db, S> {
 
                     self.store.write_page(self.layout, &page, &self.table)
                         .map_err(|_| TableAccessError::UpdateRowsError("Write in place error: cannot write page".to_string()))?;
+
+                    // the size of the page hasn't changed, so no fsm call needed
                 }
             }
         }
@@ -436,41 +441,25 @@ impl<'db, S: Store> TableAccess<'db, S> {
         Ok(())
     }
 
-    // Currently most naive insert implementation: go over all pages and look if there is space left :)
-    // Should be refactored, so that FSM is used to find pages with free space
+    // Uses FSM to find a page that has enough space
     /// Returns (page_id, slot_id)
     fn raw_insert<B: FnOnce(&Self, (i32, usize)) -> Result<(), TableAccessError>>(&self, row_data: Vec<u8>, before_saving_hook: B) -> Result<(i32, usize), TableAccessError> {
-        let page_iterator = self.store.seq_page_iterator(self.layout, &self.table)
-            .map_err(|_| TableAccessError::InsertRowError("Cannot retrieve page iterator".to_string()))?;
+        let mut page = self.fsm().find_available_page(row_data.len());
 
-        for mut page in page_iterator {
-            if page.can_insert(&row_data) {
-                let slot_id = page.insert_record(row_data)?;
-
-                before_saving_hook(self, (page.page_id(), slot_id))?;
-
-                self.store.write_page(self.layout, &page, &self.table)
-                    .map_err(|e| TableAccessError::InsertRowError(format!("Cannot write page: {}", e.to_string())))?;
-
-                return Ok((page.page_id(), slot_id));
-            }
+        if !page.can_insert(&row_data) {
+            return Err(TableAccessError::InsertRowError("Critical: FSM returned page with too little space. Likely a corruption of FSM.".to_owned()))
         }
 
-        // No page with enough space found, so allocate a new one:
-        // this can lead to a lot of new allocated pages, for example, if the the before_saving_hook fails.
-        // Actually, the new_page must be deallocated, if the hook fails.
-        let mut new_page = self.store.allocate_page(self.layout, &self.table)
-            .map_err(|e| TableAccessError::InsertRowError(format!("Cannot allocate page: {}", e.to_string())))?;
+        let slot_id = page.insert_record(row_data)?;
 
-        // If row size is larger than page data size, it will fail here
-        let slot_id = new_page.insert_record(row_data)?;
+        before_saving_hook(self, (page.page_id(), slot_id))?;
 
-        before_saving_hook(self, (new_page.page_id(), slot_id))?;
+        self.store.write_page(self.layout, &page, &self.table)
+            .map_err(|e| TableAccessError::InsertRowError(format!("Cannot write page: {}", e.to_string())))?;
 
-        self.store.write_page(self.layout, &new_page, &self.table)
-            .map_err(|e| TableAccessError::InsertRowError(format!("Cannot write new allocated page: {}", e.to_string())))?;
+        self.fsm().update(&page);
 
-        Ok((new_page.page_id(), slot_id))
+        Ok((page.page_id(), slot_id))
     }
 
     pub fn insert(&self, row: &Row) -> Result<(), TableAccessError> {
@@ -499,9 +488,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use crate::{data::page::PageDataLayout, 
-        database::table_access::TableAccess, store::{IndexedRowIterator, Store, file_store::FileStore}, 
-        table::{Column, ColumnType, TableSchema, table::{Cell, Row, Table}},
+    use crate::{data::page::PageDataLayout, database::table_access::TableAccess, fsm::fsm::Fsm, store::{IndexedRowIterator, Store, file_store::FileStore}, table::{Column, ColumnType, TableSchema, table::{Cell, Row, Table}}
     };
 
     #[test]
@@ -514,10 +501,12 @@ mod tests {
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
-        let layout = PageDataLayout::new(64).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
-
-        let access = TableAccess::new(table, &store, &layout);
+        
+        let access = TableAccess::new(table.clone(), &store, &layout);
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first = Row::new(vec![
             Cell::Varchar("Rabbit".to_owned()),
@@ -563,10 +552,12 @@ mod tests {
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
-        let layout = PageDataLayout::new(64).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
-        let access = TableAccess::new(table, &store, &layout);
+        let access = TableAccess::new(table.clone(), &store, &layout);
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first = Row::new(vec![
             Cell::Varchar("Rabbit".to_owned()),
@@ -617,10 +608,12 @@ mod tests {
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
-        let layout = PageDataLayout::new(64).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
-        let access = TableAccess::new(table, &store, &layout);
+        let access = TableAccess::new(table.clone(), &store, &layout);
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_row = Row::new(vec![
             Cell::Varchar("Rabbit".to_owned()),
@@ -659,13 +652,16 @@ mod tests {
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
-        let layout = PageDataLayout::new(32).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
         let btree = RefCell::new(store.read_btree(1).unwrap());
 
-        let access = TableAccess::new(table, &store, &layout)
+        let access = TableAccess::new(table.clone(), &store, &layout)
             .with_indexes(vec![(1, btree)]);
+
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_row = Row::new(vec![
             Cell::Int(42),
@@ -698,13 +694,16 @@ mod tests {
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
-        let layout = PageDataLayout::new(32).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
         let btree = RefCell::new(store.read_btree(1).unwrap());
 
         let access = TableAccess::new(table.clone(), &store, &layout)
             .with_indexes(vec![(1, btree)]);
+
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_row = Row::new(vec![
             Cell::Int(42),
@@ -737,13 +736,16 @@ mod tests {
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
-        let layout = PageDataLayout::new(32).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
         let btree = RefCell::new(store.read_btree(1).unwrap());
 
-        let access = TableAccess::new(table, &store, &layout)
+        let access = TableAccess::new(table.clone(), &store, &layout)
             .with_indexes(vec![(1, btree)]);
+
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_row = Row::new(vec![
             Cell::Int(42),
@@ -778,13 +780,16 @@ mod tests {
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
-        let layout = PageDataLayout::new(32).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
         let btree = RefCell::new(store.read_btree(1).unwrap());
 
-        let access = TableAccess::new(table, &store, &layout)
+        let access = TableAccess::new(table.clone(), &store, &layout)
             .with_indexes(vec![(1, btree)]);
+
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_row = Row::new(vec![
             Cell::Int(42),
@@ -811,13 +816,16 @@ mod tests {
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
         // Small page size, so we will have 2 pages (14 bytes header, 5 bytes row + 7 bytes slot size)
-        let layout = PageDataLayout::new(32).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
         let btree = RefCell::new(store.read_btree(1).unwrap());
 
         let access = TableAccess::new(table.clone(), &store, &layout)
             .with_indexes(vec![(1, btree)]);
+
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_row = Row::new(vec![
             Cell::Int(42),
@@ -863,10 +871,12 @@ mod tests {
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
         // Small page size, so we will have 2 pages (14 bytes header, 5 bytes row + 7 bytes slot size)
-        let layout = PageDataLayout::new(32).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
-        let access = TableAccess::new(table, &store, &layout);
+        let access = TableAccess::new(table.clone(), &store, &layout);
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_row = Row::new(vec![
             Cell::Int(42),
@@ -905,10 +915,12 @@ mod tests {
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
-        let layout = PageDataLayout::new(64).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
-        let access = TableAccess::new(table, &store, &layout);
+        let access = TableAccess::new(table.clone(), &store, &layout);
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_row = Row::new(vec![
             Cell::Varchar("Hans".to_owned())
@@ -937,11 +949,13 @@ mod tests {
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
-        let layout = PageDataLayout::new(64).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
 
         store.create(&layout, &table).unwrap();
 
-        let access = TableAccess::new(table, &store, &layout);
+        let access = TableAccess::new(table.clone(), &store, &layout);
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_row = Row::new(vec![
             Cell::Int(1),
@@ -973,11 +987,14 @@ mod tests {
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
-        let layout = PageDataLayout::new(64).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
         
         store.create(&layout, &table).unwrap();
 
-        let access = TableAccess::new(table, &store, &layout);
+        let access = TableAccess::new(table.clone(), &store, &layout);
+
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_row = Row::new(vec![
             Cell::Int(1),
@@ -1012,10 +1029,12 @@ mod tests {
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
-        let layout = PageDataLayout::new(64).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
 
         store.create(&layout, &table).unwrap();
-        let access = TableAccess::new(table, &store, &layout);
+        let access = TableAccess::new(table.clone(), &store, &layout);
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_row = Row::new(vec![
             Cell::Int(1),
@@ -1049,7 +1068,9 @@ mod tests {
         let layout: PageDataLayout = PageDataLayout::new(1024).unwrap();
 
         store.create(&layout, &person_table).unwrap();
-        let person_access = TableAccess::new(person_table, &store, &layout);
+        let person_access = TableAccess::new(person_table.clone(), &store, &layout);
+        let fsm_access = Fsm::access(&person_table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_person = Row::new(vec![
             Cell::Int(1),
@@ -1072,7 +1093,9 @@ mod tests {
         let address_table = Table::new(2, "addresses".to_owned(), address_schema);
         store.create(&layout, &address_table).unwrap();
 
-        let address_access = TableAccess::new(address_table, &store, &layout);
+        let address_access = TableAccess::new(address_table.clone(), &store, &layout);
+        let fsm_access = Fsm::access(&address_table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_address = Row::new(vec![
             Cell::Int(1),

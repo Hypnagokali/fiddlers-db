@@ -5,7 +5,7 @@ use std::{cell::RefCell, fs::create_dir, num::ParseIntError, path::Path};
 
 use thiserror::Error;
 
-use crate::{data::page::PageDataLayout, database::{seq_access::{SeqAccess, SeqAccessError}, table_access::{TableAccess, TableAccessError}}, store::{Store, StoreError, file_store::FileStore}, table::{Column, ColumnType, TableSchema, table::{Cell, Row, Table}}, tree::store::BTreeStore};
+use crate::{data::page::PageDataLayout, database::{seq_access::{SeqAccess, SeqAccessError}, table_access::{TableAccess, TableAccessError}}, fsm::fsm::Fsm, store::{Store, StoreError, file_store::FileStore}, table::{Column, ColumnType, TableSchema, table::{Cell, Row, Table}}, tree::store::BTreeStore};
 
 // TODO: define constants for system catalog
 // Not a good solution for NULL, but very simple for now (see comment in btree module)
@@ -191,7 +191,9 @@ impl<S: Store> Database<S> {
     fn init_table_table(&self) -> Result<(), DatabaseError> {
         let table_table = self.table_instance();
         self.store.create(&self.layout, &table_table)?;
-        let access = TableAccess::new(table_table, &self.store, &self.layout);
+        let access = TableAccess::new(table_table.clone(), &self.store, &self.layout);
+        let fsm_access = Fsm::access(&table_table);
+        self.store.create(&self.layout, &fsm_access)?;
 
         let table_row_tables = Row::new(vec![
             Cell::Int(1),
@@ -226,7 +228,9 @@ impl<S: Store> Database<S> {
         let col_table = self.col_table_instance();
 
         self.store.create(&self.layout, &col_table)?;
-        let access = TableAccess::new(col_table, &self.store, &self.layout);
+        let access = TableAccess::new(col_table.clone(), &self.store, &self.layout);
+        let fsm_access = Fsm::access(&col_table);
+        self.store.create(&self.layout, &fsm_access)?;
 
         // insert rows for columns table - "tables" table columns
         let col_row_tables_id = Row::new(vec![
@@ -371,7 +375,10 @@ impl<S: Store> Database<S> {
         let seq_table = Table::new(3, "sequences".to_owned(), seq_schema);
         self.store.create(&self.layout, &seq_table)?;
 
-        let tbl_seq = TableAccess::new(seq_table, &self.store, &self.layout);
+        let tbl_seq = TableAccess::new(seq_table.clone(), &self.store, &self.layout);
+        let fsm_access = Fsm::access(&seq_table);
+        self.store.create(&self.layout, &fsm_access)?;
+
         let seq_row_table_id = Row::new(vec![
             Cell::Int(1),
             Cell::Int(10),
@@ -413,6 +420,9 @@ impl<S: Store> Database<S> {
 
         let idx_table = Table::new(4, "indexes".to_owned(), idx_schema);
         self.store.create(&self.layout, &idx_table)?;
+
+        let fsm_access = Fsm::access(&idx_table);
+        self.store.create(&self.layout, &fsm_access)?;
 
         Ok(())
     }
@@ -685,8 +695,15 @@ impl<S: Store> Database<S> {
         let new_table = Table::new(tbl_id, name.to_owned(), schema);
         
         self.store.create(&self.layout, &new_table)?;
+        self.create_fsm(&new_table)?;
 
         Ok(new_table)
+    }
+
+    fn create_fsm(&self, table: &Table) -> Result<(), CreateTableError> {
+        let fsm_access = Fsm::access(&table);
+        self.store.create(&self.layout, &fsm_access)?;
+        Ok(())
     }
 }
 

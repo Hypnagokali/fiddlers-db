@@ -33,7 +33,7 @@ struct FsmAddress {
 // Implemented with a lot of trust
 // No self healing, no check, if the page can be read as BinaryTree
 // If FSM is corrupted, the database will likely explode
-pub struct Fsm<'db, S: Store> {
+pub struct Fsm<'db, S> {
     store: &'db S,
     table: &'db Table,
     page_layout: &'db PageDataLayout,
@@ -43,15 +43,13 @@ pub struct Fsm<'db, S: Store> {
     slots: usize,
 }
 
-impl<'db, S: Store> Fsm<'db, S> {
-    fn root(&self) -> FsmAddress {
-        // create a owned FsmAddress, so it's easier to walk the tree using the same variable
-        FsmAddress {
-            node_number: 0,
-            level: self.depth - 1,
-        }
+impl Fsm<'_, ()> {
+    pub fn access<'a>(table: &'a Table) -> impl PageStorage + 'a {
+        FsmAccess::new(table)
     }
+}
 
+impl<'db, S: Store> Fsm<'db, S> {
     pub fn new(store: &'db S, page_layout: &'db PageDataLayout, table: &'db Table) -> Self {
         if page_layout.page_size() < 256 {
             panic!("Page size is too small. 256 is the minimum page size");
@@ -82,38 +80,11 @@ impl<'db, S: Store> Fsm<'db, S> {
             slots: structure.leaf_nodes,
         }
     }
-
-    // Returns parent FsmAddress and slot in parent
-    fn parent(&self, child_addr: &FsmAddress) -> (FsmAddress, usize) {
-        if child_addr.level == self.root_level {
-            // TODO: proper error handling
-            panic!("Try to reach parent from root level");
-        }
-
-        let level = child_addr.level + 1;
-        let node_number = child_addr.node_number / self.slots;
-        let parent_slot = child_addr.node_number % self.slots; // map to 0...slots - 1
-
-        let parent = FsmAddress {
-            node_number,
-            level,
-        };
-
-        (parent, parent_slot)
-    }
-
-    fn child(&self, parent_addr: &FsmAddress, slot: usize) -> FsmAddress {
-        if parent_addr.level == 0 {
-            // TODO: proper error handling
-            panic!("Try to reach a child from bottom level");
-        }
-
-        let level = parent_addr.level - 1;
-        let node_number = parent_addr.node_number * self.slots + slot;
-
+    fn root(&self) -> FsmAddress {
+        // create a owned FsmAddress, so it's easier to walk the tree using the same variable
         FsmAddress {
-            node_number,
-            level,
+            node_number: 0,
+            level: self.depth - 1,
         }
     }
 
@@ -195,6 +166,7 @@ impl<'db, S: Store> Fsm<'db, S> {
             );
 
             let slot = fsm_tree.find_available(cat);
+            
             if let Some(slot) = slot {
                 if addr.level == 0 {
                     // bottom level, find heap page
@@ -225,8 +197,38 @@ impl<'db, S: Store> Fsm<'db, S> {
         self.store.read_page(self.page_layout, heap_page_id, self.table).unwrap()
     }
 
-    pub fn update_available_space(&self, page: Page<'_>) {
-        unimplemented!()
+    // Returns parent FsmAddress and slot in parent
+    fn parent(&self, child_addr: &FsmAddress) -> (FsmAddress, usize) {
+        if child_addr.level == self.root_level {
+            // TODO: proper error handling
+            panic!("Try to reach parent from root level");
+        }
+
+        let level = child_addr.level + 1;
+        let node_number = child_addr.node_number / self.slots;
+        let parent_slot = child_addr.node_number % self.slots; // map to 0...slots - 1
+
+        let parent = FsmAddress {
+            node_number,
+            level,
+        };
+
+        (parent, parent_slot)
+    }
+
+    fn child(&self, parent_addr: &FsmAddress, slot: usize) -> FsmAddress {
+        if parent_addr.level == 0 {
+            // TODO: proper error handling
+            panic!("Try to reach a child from bottom level");
+        }
+
+        let level = parent_addr.level - 1;
+        let node_number = parent_addr.node_number * self.slots + slot;
+
+        FsmAddress {
+            node_number,
+            level,
+        }
     }
 
     fn allocate_new_fsm_and_init(&self, access: &FsmAccess) {
@@ -591,6 +593,9 @@ mod tests {
         // has been init with 512 / 2 - 1 => 255 (non leaf nodes) => 236 slots
         assert_eq!(fsm.slots, 236);
         assert_eq!(meta_fsm.next_id(), 5); // full height is 4 nodes, next page will have id = 5;
+
+        // update tree
+        fsm.update(&page);
         
         // a second request should not allocate new pages:
         let page = fsm.find_available_page(200);
