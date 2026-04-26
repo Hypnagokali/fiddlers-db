@@ -28,14 +28,23 @@ impl PageDataLayout {
 
 
     // free data tuple constants
-    const SLOT_SIZE: usize = 7; // 4 bytes offset, 2 bytes length, 1 byte deleted flag
+    pub const SLOT_SIZE: usize = 7; // 4 bytes offset, 2 bytes length, 1 byte deleted flag
     const SLOT_DELETED_INDEX: usize = 0;
     const SLOT_PAGE_OFFSET_INDEX: usize = 1;
     const SLOT_RECORD_LENGTH_INDEX: usize = 5;
-    const MAX_ROW_LENGTH: u16 = u16::MAX;
+
+    pub fn max_tupel_size(&self) -> usize {
+        // This is, when the page is completely empty, so no slots are allocated and no free space is fragmented
+        self.page_data_size() - PageDataLayout::SLOT_SIZE
+    }
 
     pub fn new(page_size: u16) -> Result<Self, PageDataLayoutError> {
         if page_size < Self::MIN_PAGE_SIZE {
+            return Err(PageDataLayoutError::InvalidPageSize);
+        }
+
+        if !page_size.is_power_of_two() {
+            // The Binary tree needs this condition for example to calculate the the number of non-leaf-nodes
             return Err(PageDataLayoutError::InvalidPageSize);
         }
 
@@ -56,6 +65,9 @@ impl PageDataLayout {
 
 }
 
+// TODO: This is really confusing
+// PageFileMetadata is actually the meta data of the complete heap file
+// should maybe not live here. Is more an implementation detail of Store and how the store handles page IDs
 #[derive(Debug)]
 pub struct PageFileMetadata {
     next_id: i32, // There is currently just a signed int for ids
@@ -91,6 +103,8 @@ impl PageFileMetadata {
         self.number_of_pages
     }
 
+    // would be better to handle this completely in Store (not used anywhere in Page)
+    // then it can be private
     pub fn allocate_next_page_id(&mut self) -> i32 {
         let id = self.next_id;
         self.next_id += 1;
@@ -313,7 +327,7 @@ impl<'database> Page<'database> {
             .unwrap_or(0) as usize
     }
 
-    fn space_remaining(&self) -> usize {
+    pub fn max_available_space(&self) -> usize {
         // page_data_size - row_data_size - slots in use
         let allocated_space = self.layout.page_data_size() - self.row_data_size() - self.slot_size();
         std::cmp::max(
@@ -337,7 +351,7 @@ impl<'database> Page<'database> {
         }
 
         let needed_space = row_bytes.len() + PageDataLayout::SLOT_SIZE;
-        needed_space <= self.space_remaining() && row_bytes.len() <= PageDataLayout::MAX_ROW_LENGTH as usize
+        needed_space <= self.max_available_space()
     }
 
     // just returns the index, so that the caller can decide if it wants to get the slot mutable or not.

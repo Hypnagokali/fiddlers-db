@@ -1,6 +1,6 @@
 use std::{fs::remove_file, io::{Read, Seek, SeekFrom, Write}, path::{Path, PathBuf}};
 
-use crate::{data::page::{Page, PageDataLayout, PageFileMetadata}, store::{Store, StoreError}, table::table::Table, tree::store::BTreeStore};
+use crate::{data::page::{Page, PageDataLayout, PageFileMetadata}, store::{PageStorage, Store, StoreError}, tree::store::BTreeStore};
 
 // Defines how many keys fit into one node
 const BTREE_MAX_DEGREE: u16 = 500;
@@ -19,26 +19,26 @@ impl FileStore {
          }
     }
 
-    fn file_path(&self, table: &Table) -> PathBuf {
-        self.base_path.join(table.file_path())
+    fn file_path(&self, page_storage: &dyn PageStorage) -> PathBuf {
+        self.base_path.join(page_storage.file_path())
     }
 
-    fn delete_file(&self, table: &Table) -> Result<(), StoreError> {
-        remove_file(self.file_path(&table))
+    fn delete_file(&self, page_storage: &dyn PageStorage) -> Result<(), StoreError> {
+        remove_file(self.file_path(page_storage))
             .map_err(|e| StoreError::IoError(e.to_string()))?;
 
         Ok(())
     }
 
-    fn init(&self, layout: &PageDataLayout, table: &Table) -> Result<(), StoreError> {
+    fn init(&self, layout: &PageDataLayout, page_storage: &dyn PageStorage) -> Result<(), StoreError> {
         let metadata = PageFileMetadata::new();
-        self.write_metadata(layout, &metadata, table)
+        self.write_metadata(layout, &metadata, page_storage)
     }
 
-    fn write_metadata(&self, layout: &PageDataLayout, metadata: &PageFileMetadata, table: &Table) -> Result<(), StoreError> {
+    fn write_metadata(&self, layout: &PageDataLayout, metadata: &PageFileMetadata, page_storage: &dyn PageStorage) -> Result<(), StoreError> {
         let mut file = std::fs::OpenOptions::new()
             .write(true)
-            .open(self.file_path(&table))?;
+            .open(self.file_path(page_storage))?;
 
         file.write_all(&metadata.serialize(layout))?;
 
@@ -59,10 +59,10 @@ impl Store for FileStore {
         Ok(())
     }
 
-    fn read_metadata(&self, layout: &PageDataLayout, table: &Table) -> Result<PageFileMetadata, StoreError> {
-        let path: PathBuf = self.file_path(table);
+    fn read_metadata(&self, layout: &PageDataLayout, page_storage: &dyn PageStorage) -> Result<PageFileMetadata, StoreError> {
+        let path: PathBuf = self.file_path(page_storage);
         if !path.exists() {
-            return Err(StoreError::IoError(format!("No such data structure '{}' found (forget to call create?)", table.file_path())));
+            return Err(StoreError::IoError(format!("No such data structure '{}' found (forget to call create?)", page_storage.file_path())));
         }
 
         let mut file = std::fs::OpenOptions::new()
@@ -80,14 +80,19 @@ impl Store for FileStore {
         Ok(PageFileMetadata::deserialize(&buf))
     }
 
-    fn read_page<'database>(&self, layout: &'database PageDataLayout, page_id: i32, table: &Table) -> Result<Page<'database>, StoreError> {
+    fn read_page<'database>(&self, layout: &'database PageDataLayout, page_id: i32, page_storage: &dyn PageStorage) -> Result<Page<'database>, StoreError> {
+        if page_id < 1 {
+            return Err(StoreError::IoError(format!("Invalid page_id ({}). page_id must be positive value and not 0", page_id)));
+        }
+
         let mut page_data = vec![0; layout.page_size()];
 
         let mut file = std::fs::OpenOptions::new()
             .read(true)
-            .open(self.base_path.join(table.file_path()))?;
+            .open(self.base_path.join(page_storage.file_path()))?;
 
         let page_pos = page_id - 1;
+
         file.seek(SeekFrom::Start((layout.metadata_size() + page_pos as usize * layout.page_size()) as u64))?;
     
         file.read_exact(&mut page_data)?;
@@ -96,39 +101,39 @@ impl Store for FileStore {
         Ok(p)
     }
 
-    fn write_page(&self, layout: &PageDataLayout, page: &Page, table: &Table) -> Result<(), StoreError> {
+    fn write_page(&self, layout: &PageDataLayout, page: &Page, page_storage: &dyn PageStorage) -> Result<(), StoreError> {
         let data = page.serialize();
 
         let mut file = std::fs::OpenOptions::new()
             .write(true)
-            .open(self.base_path.join(table.file_path()))?;
+            .open(self.base_path.join(page_storage.file_path()))?;
         let page_pos = page.page_id() - 1;
         file.seek(SeekFrom::Start((layout.metadata_size() + page_pos as usize * layout.page_size()) as u64))?;
         file.write_all(&data)?;
         Ok(())
     }
     
-    fn allocate_page<'database>(&self, layout: &'database PageDataLayout, table: &Table) -> Result<Page<'database>, StoreError> {
-        let mut metadata = self.read_metadata(layout, table)?;
+    fn allocate_page<'database>(&self, layout: &'database PageDataLayout, page_storage: &dyn PageStorage) -> Result<Page<'database>, StoreError> {
+        let mut metadata = self.read_metadata(layout, page_storage)?;
         let mut new_page = Page::new(layout);
         new_page.set_page_id(metadata.allocate_next_page_id());
         
         // ToDo: here we can get into an inconsistent state if write_page fails after write_metadata succeeded
-        self.write_metadata(layout, &metadata, table)?;
-        self.write_page(layout, &new_page, table)?;
+        self.write_metadata(layout, &metadata, page_storage)?;
+        self.write_page(layout, &new_page, page_storage)?;
         Ok(new_page)
     }
     
-    fn create(&self, layout: &PageDataLayout, table: &Table) -> Result<(), StoreError> {
-        if std::fs::exists(self.file_path(&table))? {
-            return Err(StoreError::IoError(format!("Data structure '{}' already exists", table.file_path())));
+    fn create(&self, layout: &PageDataLayout, page_storage: &dyn PageStorage) -> Result<(), StoreError> {
+        if std::fs::exists(self.file_path(page_storage))? {
+            return Err(StoreError::IoError(format!("Data structure '{}' already exists", page_storage.file_path())));
         }
-        std::fs::File::create(self.file_path(&table))?;
-        self.init(layout, table)
+        std::fs::File::create(self.file_path(page_storage))?;
+        self.init(layout, page_storage)
     }
     
-    fn delete(&self, table: &Table) -> Result<(), StoreError> {
-        self.delete_file(table)
+    fn delete(&self, page_storage: &dyn PageStorage) -> Result<(), StoreError> {
+        self.delete_file(page_storage)
     }
     
     fn read_btree(&self, btree_id: i32) -> Result<BTreeStore, StoreError> {

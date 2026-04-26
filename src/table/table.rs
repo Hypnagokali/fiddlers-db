@@ -130,10 +130,6 @@ impl Table {
         &self.inner.schema
     }
 
-    pub fn file_path(&self) -> String {
-        format!("table_{}.dat", self.id())
-    }
-
     pub fn validate_row(&self, row: &Row) -> Result<(), RowValidationError> {
         row.validate(&self.inner.schema)
     }
@@ -280,21 +276,6 @@ mod tests {
         assert!(matches!(&cells[0], Cell::Int(42)));
         assert!(matches!(&cells[1], Cell::Varchar(s) if s == "John"));
         assert!(matches!(&cells[2], Cell::Byte(1)));
-    }
-
-    #[test]
-    fn table_should_return_table_path_correctly() {
-        let schema = TableSchema::new(vec![
-            Column::new(1, "id", ColumnType::Int),
-        ]);
-
-        let table = Table::new(
-            42,
-            "users".to_string(),
-            schema,
-        );
-
-        assert_eq!(table.file_path(), "table_42.dat");
     }
 
     #[test]

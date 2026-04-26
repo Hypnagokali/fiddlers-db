@@ -12,6 +12,9 @@ mod database;
 #[allow(unused)]
 mod tree;
 
+#[allow(unused)]
+mod fsm;
+
 fn create_table_persons(db: &Database<FileStore>) {
     let persons_table = db.create_table("persons", vec![
         ("id", ColumnType::Int, true, true),

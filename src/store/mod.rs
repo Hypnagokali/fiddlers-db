@@ -18,17 +18,30 @@ pub trait Store {
     // the BTree output must be a trait to provide different implementations. BTreeStore is only file based at the moment.
     fn read_btree(&self, btree_id: i32) -> Result<BTreeStore, StoreError>;
     fn delete_all(&self) -> Result<(), StoreError>;
-    fn create(&self, layout: &PageDataLayout, table: &Table) -> Result<(), StoreError>;
-    fn delete(&self, table: &Table) -> Result<(), StoreError>;
-    fn read_metadata(&self, layout: &PageDataLayout, table: &Table) -> Result<PageFileMetadata, StoreError>;
-    fn read_page<'db>(&self, layout: &'db PageDataLayout, page_id: i32, table: &Table) -> Result<Page<'db>, StoreError>;
-    fn write_page(&self, layout: &PageDataLayout, page: &Page, table: &Table) -> Result<(), StoreError>;
-    fn allocate_page<'db>(&self, layout: &'db PageDataLayout, table: &Table) -> Result<Page<'db>, StoreError>;
-    fn seq_page_iterator<'database>(&'database self, layout: &'database PageDataLayout, table: &'database crate::table::table::Table) -> Result<PageIterator<'database, Self>, StoreError> 
+    fn create(&self, layout: &PageDataLayout, page_storage: &dyn PageStorage) -> Result<(), StoreError>;
+    fn delete(&self, page_storage: &dyn PageStorage) -> Result<(), StoreError>;
+    fn read_metadata(&self, layout: &PageDataLayout, page_storage: &dyn PageStorage) -> Result<PageFileMetadata, StoreError>;
+    fn read_page<'db>(&self, layout: &'db PageDataLayout, page_id: i32, page_storage: &dyn PageStorage) -> Result<Page<'db>, StoreError>;
+    fn write_page(&self, layout: &PageDataLayout, page: &Page, page_storage: &dyn PageStorage) -> Result<(), StoreError>;
+    fn allocate_page<'db>(&self, layout: &'db PageDataLayout, page_storage: &dyn PageStorage) -> Result<Page<'db>, StoreError>;
+    fn seq_page_iterator<'database>(&'database self, layout: &'database PageDataLayout, page_storage: &'database dyn PageStorage) 
+        -> Result<PageIterator<'database, Self>, StoreError> 
     where
         Self: Sized
     {
-        Ok(PageIterator::new(table, self, layout))
+        Ok(PageIterator::new(page_storage, self, layout))
+    }
+}
+
+// Just the path where the physical page lives
+// PageStorage should perhaps be defined in a global scope
+pub trait PageStorage {
+    fn file_path(&self) -> String; 
+}
+
+impl PageStorage for Table {
+    fn file_path(&self) -> String {
+        format!("table_{}.dat", self.id())
     }
 }
 
@@ -102,13 +115,13 @@ impl<'db, S: Store> Iterator for IndexedRowIterator<'db, S> {
 pub struct PageIterator<'db, S: Store> {
     layout: &'db PageDataLayout,
     store: &'db S,
-    table: &'db Table,
+    table: &'db dyn PageStorage,
     current_page_id: i32,
     total_pages: i32,
 }
 
 impl<'db, S: Store> PageIterator<'db, S> {
-    pub fn new(table: &'db Table, store: &'db S, layout: &'db PageDataLayout) -> Self {
+    pub fn new(table: &'db dyn PageStorage, store: &'db S, layout: &'db PageDataLayout) -> Self {
         // ToDo: better error handling
         let metadata = store.read_metadata(layout, table).expect("Couldn't read metadata");
         let total_pages = metadata.number_of_pages();
