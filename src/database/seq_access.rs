@@ -80,7 +80,7 @@ impl<'db, S: Store> SeqAccess<'db, S> {
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
-    use crate::{data::page::PageDataLayout, database::{seq_access::SeqAccess, table_access::TableAccess}, store::{Store, file_store::FileStore}, table::{Column, ColumnType, TableSchema, table::{Cell, Row, Table}}};
+    use crate::{data::page::PageDataLayout, database::{seq_access::SeqAccess, table_access::TableAccess}, fsm::fsm::Fsm, store::{Store, file_store::FileStore}, table::{Column, ColumnType, TableSchema, table::{Cell, Row, Table}}};
 
     #[test]
     fn find_should_return_error_if_cell_has_wrong_type() {
@@ -93,10 +93,12 @@ mod tests {
         let seq_table = Table::new(1, "sequences".to_owned(), seq_schema);
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
-        let layout = PageDataLayout::new(1028).unwrap();
+        let layout = PageDataLayout::new(1024).unwrap();
 
         store.create(&layout, &seq_table).unwrap();
-        let access = TableAccess::new(seq_table, &store, &layout);
+        let access = TableAccess::new(seq_table.clone(), &store, &layout);
+        let fsm_access = Fsm::access(&seq_table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let my_seq = Row::new(vec![
             Cell::Int(1),

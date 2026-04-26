@@ -488,9 +488,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use crate::{data::page::PageDataLayout, 
-        database::table_access::TableAccess, store::{IndexedRowIterator, Store, file_store::FileStore}, 
-        table::{Column, ColumnType, TableSchema, table::{Cell, Row, Table}},
+    use crate::{data::page::PageDataLayout, database::table_access::TableAccess, fsm::fsm::Fsm, store::{IndexedRowIterator, Store, file_store::FileStore}, table::{Column, ColumnType, TableSchema, table::{Cell, Row, Table}}
     };
 
     #[test]
@@ -503,10 +501,12 @@ mod tests {
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
-        let layout = PageDataLayout::new(64).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
-
-        let access = TableAccess::new(table, &store, &layout);
+        
+        let access = TableAccess::new(table.clone(), &store, &layout);
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first = Row::new(vec![
             Cell::Varchar("Rabbit".to_owned()),
@@ -552,10 +552,12 @@ mod tests {
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
-        let layout = PageDataLayout::new(64).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
-        let access = TableAccess::new(table, &store, &layout);
+        let access = TableAccess::new(table.clone(), &store, &layout);
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first = Row::new(vec![
             Cell::Varchar("Rabbit".to_owned()),
@@ -606,10 +608,12 @@ mod tests {
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
-        let layout = PageDataLayout::new(64).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
-        let access = TableAccess::new(table, &store, &layout);
+        let access = TableAccess::new(table.clone(), &store, &layout);
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_row = Row::new(vec![
             Cell::Varchar("Rabbit".to_owned()),
@@ -648,13 +652,16 @@ mod tests {
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
-        let layout = PageDataLayout::new(32).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
         let btree = RefCell::new(store.read_btree(1).unwrap());
 
-        let access = TableAccess::new(table, &store, &layout)
+        let access = TableAccess::new(table.clone(), &store, &layout)
             .with_indexes(vec![(1, btree)]);
+
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_row = Row::new(vec![
             Cell::Int(42),
@@ -687,13 +694,16 @@ mod tests {
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
-        let layout = PageDataLayout::new(32).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
         let btree = RefCell::new(store.read_btree(1).unwrap());
 
         let access = TableAccess::new(table.clone(), &store, &layout)
             .with_indexes(vec![(1, btree)]);
+
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_row = Row::new(vec![
             Cell::Int(42),
@@ -726,13 +736,16 @@ mod tests {
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
-        let layout = PageDataLayout::new(32).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
         let btree = RefCell::new(store.read_btree(1).unwrap());
 
-        let access = TableAccess::new(table, &store, &layout)
+        let access = TableAccess::new(table.clone(), &store, &layout)
             .with_indexes(vec![(1, btree)]);
+
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_row = Row::new(vec![
             Cell::Int(42),
@@ -767,13 +780,16 @@ mod tests {
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
-        let layout = PageDataLayout::new(32).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
         let btree = RefCell::new(store.read_btree(1).unwrap());
 
-        let access = TableAccess::new(table, &store, &layout)
+        let access = TableAccess::new(table.clone(), &store, &layout)
             .with_indexes(vec![(1, btree)]);
+
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_row = Row::new(vec![
             Cell::Int(42),
@@ -800,13 +816,16 @@ mod tests {
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
         // Small page size, so we will have 2 pages (14 bytes header, 5 bytes row + 7 bytes slot size)
-        let layout = PageDataLayout::new(32).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
         let btree = RefCell::new(store.read_btree(1).unwrap());
 
         let access = TableAccess::new(table.clone(), &store, &layout)
             .with_indexes(vec![(1, btree)]);
+
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_row = Row::new(vec![
             Cell::Int(42),
@@ -852,10 +871,12 @@ mod tests {
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
         // Small page size, so we will have 2 pages (14 bytes header, 5 bytes row + 7 bytes slot size)
-        let layout = PageDataLayout::new(32).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
-        let access = TableAccess::new(table, &store, &layout);
+        let access = TableAccess::new(table.clone(), &store, &layout);
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_row = Row::new(vec![
             Cell::Int(42),
@@ -894,10 +915,12 @@ mod tests {
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
-        let layout = PageDataLayout::new(64).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
-        let access = TableAccess::new(table, &store, &layout);
+        let access = TableAccess::new(table.clone(), &store, &layout);
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_row = Row::new(vec![
             Cell::Varchar("Hans".to_owned())
@@ -926,11 +949,13 @@ mod tests {
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
-        let layout = PageDataLayout::new(64).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
 
         store.create(&layout, &table).unwrap();
 
-        let access = TableAccess::new(table, &store, &layout);
+        let access = TableAccess::new(table.clone(), &store, &layout);
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_row = Row::new(vec![
             Cell::Int(1),
@@ -962,11 +987,14 @@ mod tests {
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
-        let layout = PageDataLayout::new(64).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
         
         store.create(&layout, &table).unwrap();
 
-        let access = TableAccess::new(table, &store, &layout);
+        let access = TableAccess::new(table.clone(), &store, &layout);
+
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_row = Row::new(vec![
             Cell::Int(1),
@@ -1001,10 +1029,12 @@ mod tests {
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
         let store = FileStore::new(base_dir.path());
-        let layout = PageDataLayout::new(64).unwrap();
+        let layout = PageDataLayout::new(256).unwrap();
 
         store.create(&layout, &table).unwrap();
-        let access = TableAccess::new(table, &store, &layout);
+        let access = TableAccess::new(table.clone(), &store, &layout);
+        let fsm_access = Fsm::access(&table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_row = Row::new(vec![
             Cell::Int(1),
@@ -1038,7 +1068,9 @@ mod tests {
         let layout: PageDataLayout = PageDataLayout::new(1024).unwrap();
 
         store.create(&layout, &person_table).unwrap();
-        let person_access = TableAccess::new(person_table, &store, &layout);
+        let person_access = TableAccess::new(person_table.clone(), &store, &layout);
+        let fsm_access = Fsm::access(&person_table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_person = Row::new(vec![
             Cell::Int(1),
@@ -1061,7 +1093,9 @@ mod tests {
         let address_table = Table::new(2, "addresses".to_owned(), address_schema);
         store.create(&layout, &address_table).unwrap();
 
-        let address_access = TableAccess::new(address_table, &store, &layout);
+        let address_access = TableAccess::new(address_table.clone(), &store, &layout);
+        let fsm_access = Fsm::access(&address_table);
+        store.create(&layout, &fsm_access).unwrap();
 
         let first_address = Row::new(vec![
             Cell::Int(1),
