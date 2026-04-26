@@ -4,6 +4,7 @@ use crate::{data::page::{self, PageDataLayout}, tree};
 /// https://github.com/postgres/postgres/blob/master/src/backend/storage/freespace/fsmpage.c
 
 pub struct BinaryTree {
+    // an reference into the page would be more efficient
     arr: Vec<u8>,
     non_leaf_nodes: usize,
     leaf_nodes: usize,
@@ -15,6 +16,7 @@ pub struct NodeStructure {
     pub nodes: usize,
 }
 
+#[derive(Debug)]
 pub struct FsmSlot {
     slot_index: usize,
     available_space: u8,
@@ -65,13 +67,15 @@ impl BinaryTree {
     }
 
     pub fn deserialize(bytes: &[u8], page_layout: &PageDataLayout) -> Self {
+        let max = bytes.iter().max();
         let mut tree = BinaryTree::new(page_layout);
         
         if tree.arr.len() != bytes.len() {
             panic!("Invalid byte array length for deserialization. PageLayout is maybe incompatible");
         }
         
-        tree.arr =  bytes.to_vec();
+        // this is overhead (ref directly into the page array would be nicer)
+        tree.arr = bytes.to_vec();
 
         tree
     }

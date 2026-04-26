@@ -81,6 +81,10 @@ impl Store for FileStore {
     }
 
     fn read_page<'database>(&self, layout: &'database PageDataLayout, page_id: i32, page_storage: &dyn PageStorage) -> Result<Page<'database>, StoreError> {
+        if page_id < 1 {
+            return Err(StoreError::IoError(format!("Invalid page_id ({}). page_id must be positive value and not 0", page_id)));
+        }
+
         let mut page_data = vec![0; layout.page_size()];
 
         let mut file = std::fs::OpenOptions::new()
@@ -88,6 +92,7 @@ impl Store for FileStore {
             .open(self.base_path.join(page_storage.file_path()))?;
 
         let page_pos = page_id - 1;
+
         file.seek(SeekFrom::Start((layout.metadata_size() + page_pos as usize * layout.page_size()) as u64))?;
     
         file.read_exact(&mut page_data)?;
