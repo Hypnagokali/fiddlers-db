@@ -26,9 +26,8 @@ fn create_table_persons(db: &Database<FileStore>) {
     let person_acc = db.table_access(persons_table.clone()).unwrap();
     let mut seq_acc = db.seq_access_for_table(persons_table).unwrap();
 
-    // As soon as FSM is implemented, an example with a million rows should be possible
-    for i in 1..20000 {
-        if i % 1000 == 0 {
+    for i in 1..1000_000 {
+        if i % 10000 == 0 {
             println!("Added {} entries", i);
         }
         let next_id = seq_acc.next_val("id").unwrap();
@@ -61,6 +60,6 @@ fn find_by_number_without_index(db: &Database<FileStore>, num: i32) {
 fn main() {
     let db = Database::new("testdb");
     // create_table_persons(&db);
-    // find_by_id_index(&db, 19999);
-    // find_by_number_without_index(&db, 20000);
+    // find_by_id_index(&db, 345_000);
+    // find_by_number_without_index(&db, 345_000);
 }
