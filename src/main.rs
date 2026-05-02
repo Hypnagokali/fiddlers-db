@@ -66,7 +66,7 @@ where
     let print_every = query_values.len() / 10;
 
     for (i, value) in query_values.iter().enumerate() {
-        if i % print_every == 0 {
+        if print_every > 0 && i % print_every == 0 {
             println!("Queries: {}", i);
         }
         let match_count = query(*value);
@@ -112,12 +112,13 @@ fn main() {
     let db = Database::new("testdb");
     // create_table_persons(&db);
 
-    let repetitions = 100;
+    let repetitions = 1000;
     let runs = 5;
     let table = db.read_table("persons").unwrap();
     let tbl_acc = db.table_access(table).unwrap();
 
-    let mut results = Vec::with_capacity(runs);
+    let mut idx_results = Vec::with_capacity(runs);
+    let mut seq_results = Vec::with_capacity(runs);
 
     println!("Benchmark started:");
     println!("  repetitions per run: {}", repetitions);
@@ -127,25 +128,27 @@ fn main() {
         let query_ids = generate_query_ids(repetitions);
 
         // Indexed queries
-        let result = benchmark_queries(&query_ids, |id| {
+        let idx_result = benchmark_queries(&query_ids, |id| {
             tbl_acc.find("id", Cell::Int(id)).unwrap().rows().len()
         });
+        print_benchmark("query result (unique index used)", repetitions, &idx_result);
 
         // Sequential scan queries
-        // let result: BenchmarkResult = benchmark_queries(&query_ids, |id| {
-        //     tbl_acc.find("number", Cell::Int(120 + id)).unwrap().rows().len()
-        // });
+        let seq_result = benchmark_queries(&query_ids, |id| {
+            tbl_acc.find("number", Cell::Int(120 + id)).unwrap().rows().len()
+        });
 
         println!("Run {}:", run);
-        print_benchmark("indexed lookup (id)", repetitions, &result);
-        // print_benchmark("non-indexed lookup (number)", repetitions, &non_indexed);
+        print_benchmark("query result (seq scan)", repetitions, &seq_result);
 
-        results.push(result);
-        // non_indexed_results.push(non_indexed);
+        idx_results.push(idx_result);
+        seq_results.push(seq_result);
     }
 
-    let avg = average_result(&results);
+    let avg_idx = average_result(&idx_results);
+    let avg_seq = average_result(&seq_results);
 
     println!("Average over {} runs:", runs);
-    print_benchmark("query result", repetitions, &avg);
+    print_benchmark("query result", repetitions, &avg_idx);
+    print_benchmark("query result", repetitions, &avg_seq);
 }
