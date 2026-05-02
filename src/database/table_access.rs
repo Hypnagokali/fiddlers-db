@@ -2,7 +2,7 @@ use std::{cell::RefCell, collections::HashMap};
 
 use thiserror::Error;
 
-use crate::{data::page::{PageDataLayout, PageError, Record}, fsm::fsm::Fsm, store::{IndexedRowIterator, PageIterator, PageRowIterator, Store}, table::{Column, TableSchema, table::{Cell, Row, RowValidationError, Table}}, tree::store::BTreeStore};
+use crate::{data::page::{Page, PageDataLayout, PageError, Record}, fsm::fsm::Fsm, store::{IndexedRowIterator, PageRowIterator, Store}, table::{Column, TableSchema, table::{Cell, Row, RowValidationError, Table}}, tree::store::BTreeStore};
 
 pub struct TableAccess<'db, S> {
     table: Table,
@@ -99,10 +99,10 @@ impl<'db> QueryResult<'db, (Record, Row)> {
         }
     }
 
-    pub fn new<S: Store>(
-        page_iter: PageIterator<'_, S>,
+    pub fn new<I: Iterator<Item = Page<'db>> +'db>(
+        page_iter: I,
         schema: TableSchema,
-    ) -> QueryResult<'_, (Record, Row)> {
+    ) -> QueryResult<'db, (Record, Row)> {
 
         let schema_iter = schema.clone();
         let i = page_iter.flat_map(move |p| {
@@ -239,7 +239,10 @@ impl<'db, S: Store> TableAccess<'db, S> {
 
     /// Load all rows from all pages in the table
     pub fn find_all(&'db self) -> Result<QueryResult<'db, (Record, Row)>, TableAccessError> {
-        let page_iter = PageIterator::new(&self.table, self.store, self.layout);
+        let page_iter = self.store.seq_page_iterator(self.layout, &self.table)
+            .map_err(|_| {
+                TableAccessError::LoadRowsError("Cannot load PageIterator".to_owned())
+            })?;
         Ok(QueryResult::new(page_iter, self.table.schema().clone()))
     }
 
@@ -266,7 +269,10 @@ impl<'db, S: Store> TableAccess<'db, S> {
         
             Ok(qr)
         } else {
-            let page_iter = PageIterator::new(&self.table, self.store, self.layout);
+            let page_iter = self.store.seq_page_iterator(self.layout, &self.table)
+                .map_err(|_| {
+                    TableAccessError::LoadRowsError("Cannot load PageIterator".to_owned())
+                })?;
             let qr = QueryResult::new(page_iter, self.table.schema().clone());
 
             Ok(qr.filter(move |(_, row)| {

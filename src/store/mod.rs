@@ -14,6 +14,9 @@ use crate::{data::page::{Page, PageDataLayout, PageFileMetadata, Record, RecordI
 //  - Separate different concerns: raw physical layer, table related stuff (reading btree)
 //  - of course, the methods should not depend on Table, because theoretically the store can store everything
 pub trait Store {
+    type I<'db>: Iterator<Item = Page<'db>> 
+    where
+        Self: 'db;
     // This method is just a very quick solution. If the Store will still provide access to the BTree in future,
     // the BTree output must be a trait to provide different implementations. BTreeStore is only file based at the moment.
     fn read_btree(&self, btree_id: i32) -> Result<BTreeStore, StoreError>;
@@ -24,13 +27,8 @@ pub trait Store {
     fn read_page<'db>(&self, layout: &'db PageDataLayout, page_id: i32, page_storage: &dyn PageStorage) -> Result<Page<'db>, StoreError>;
     fn write_page(&self, layout: &PageDataLayout, page: &Page, page_storage: &dyn PageStorage) -> Result<(), StoreError>;
     fn allocate_page<'db>(&self, layout: &'db PageDataLayout, page_storage: &dyn PageStorage) -> Result<Page<'db>, StoreError>;
-    fn seq_page_iterator<'database>(&'database self, layout: &'database PageDataLayout, page_storage: &'database dyn PageStorage) 
-        -> Result<PageIterator<'database, Self>, StoreError> 
-    where
-        Self: Sized
-    {
-        Ok(PageIterator::new(page_storage, self, layout))
-    }
+    fn seq_page_iterator<'db>(&'db self, layout: &'db PageDataLayout, page_storage: &'db dyn PageStorage) 
+        -> Result<Self::I<'db>, StoreError>;
 }
 
 // Just the path where the physical page lives
@@ -109,43 +107,6 @@ impl<'db, S: Store> Iterator for IndexedRowIterator<'db, S> {
         }
 
         res
-    }
-}
-
-pub struct PageIterator<'db, S: Store> {
-    layout: &'db PageDataLayout,
-    store: &'db S,
-    table: &'db dyn PageStorage,
-    current_page_id: i32,
-    total_pages: i32,
-}
-
-impl<'db, S: Store> PageIterator<'db, S> {
-    pub fn new(table: &'db dyn PageStorage, store: &'db S, layout: &'db PageDataLayout) -> Self {
-        // ToDo: better error handling
-        let metadata = store.read_metadata(layout, table).expect("Couldn't read metadata");
-        let total_pages = metadata.number_of_pages();
-        Self {
-            table,
-            layout,
-            store,
-            current_page_id: 1,
-            total_pages,
-        }
-    }
-}
-
-impl<'db, S: Store> Iterator for PageIterator<'db, S> {
-    type Item = Page<'db>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.current_page_id > self.total_pages {
-            return None;
-        }
-        let page = self.store.read_page(self.layout, self.current_page_id, self.table).unwrap();
-
-        self.current_page_id += 1;
-        Some(page)
     }
 }
 
