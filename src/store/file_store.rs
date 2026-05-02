@@ -1,4 +1,4 @@
-use std::{fs::remove_file, io::{Read, Seek, SeekFrom, Write}, path::{Path, PathBuf}};
+use std::{fs::{File, remove_file}, io::{BufReader, Read, Seek, SeekFrom, Write}, path::{Path, PathBuf}};
 
 use crate::{data::page::{Page, PageDataLayout, PageFileMetadata}, store::{PageStorage, Store, StoreError}, tree::store::BTreeStore};
 
@@ -45,7 +45,12 @@ impl FileStore {
         Ok(())
     }
 }
+
 impl Store for FileStore {
+    type I<'database> = FilePageIterator<'database, Self>
+    where
+        Self: 'database;
+        
     fn delete_all(&self) -> Result<(), StoreError> {
         for entry in std::fs::read_dir(&self.base_path)? {
             let entry = entry?;
@@ -123,6 +128,22 @@ impl Store for FileStore {
         self.write_page(layout, &new_page, page_storage)?;
         Ok(new_page)
     }
+
+    fn seq_page_iterator<'database>(&'database self, layout: &'database PageDataLayout, page_storage: &'database dyn PageStorage) 
+        -> Result<FilePageIterator<'database, Self>, StoreError> 
+    where
+        Self: Sized
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .open(self.base_path.join(page_storage.file_path()))?;
+
+        file.seek(SeekFrom::Start(layout.metadata_size() as u64))?;
+    
+        let reader = BufReader::new(file);
+
+        Ok(FilePageIterator::new(page_storage, self, layout).with_reader(reader))
+    }
     
     fn create(&self, layout: &PageDataLayout, page_storage: &dyn PageStorage) -> Result<(), StoreError> {
         if std::fs::exists(self.file_path(page_storage))? {
@@ -143,11 +164,67 @@ impl Store for FileStore {
     }
 }
 
+pub struct FilePageIterator<'db, S: Store> {
+    layout: &'db PageDataLayout,
+    store: &'db S,
+    reader: Option<BufReader<File>>,
+    table: &'db dyn PageStorage,
+    current_page_id: i32,
+    total_pages: i32,
+}
+
+impl<'db, S: Store> FilePageIterator<'db, S> {
+    pub fn new(table: &'db dyn PageStorage, store: &'db S, layout: &'db PageDataLayout) -> Self {
+        // ToDo: better error handling
+        let metadata = store.read_metadata(layout, table).expect("Couldn't read metadata");
+        let total_pages = metadata.number_of_pages();
+        Self {
+            table,
+            layout,
+            store,
+            reader: None,
+            current_page_id: 1,
+            total_pages,
+        }
+    }
+
+    pub fn with_reader(mut self, reader: BufReader<File>) -> Self {
+        self.reader = Some(reader);
+        self
+    }
+}
+
+impl<'db, S: Store> Iterator for FilePageIterator<'db, S> {
+    type Item = Page<'db>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current_page_id > self.total_pages {
+            return None;
+        }
+
+        let page;
+        let mut buf = vec![0u8; self.layout.page_size()];
+        if let Some(reader) = self.reader.as_mut() {
+            if let Some(_) = reader.read(&mut buf).ok() {
+                page = Page::deserialize(&buf, self.layout);
+            } else {
+                return None;
+            }
+
+        } else {
+            page = self.store.read_page(self.layout, self.current_page_id, self.table).unwrap();
+        }
+
+        self.current_page_id += 1;
+        Some(page)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
 
-    use crate::{data::page::PageDataLayout, store::{PageIterator, Store, file_store::FileStore}, table::{Column, ColumnType, TableSchema, table::{Cell, Row, Table}}};
+    use crate::{data::page::PageDataLayout, store::{Store, file_store::{FilePageIterator, FileStore}}, table::{Column, ColumnType, TableSchema, table::{Cell, Row, Table}}};
 
     struct Sequence {
             col_id: i32,
@@ -300,7 +377,7 @@ mod tests {
         new_page.insert_record(row.serialize()).unwrap();
         store.write_page(&layout, &new_page, &table).unwrap();
 
-        let mut iter = PageIterator::new(&table, &store, &layout);
+        let mut iter = FilePageIterator::new(&table, &store, &layout);
 
         let page = iter.next().unwrap();
 
