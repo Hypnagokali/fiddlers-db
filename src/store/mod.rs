@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use thiserror::Error;
 
-use crate::{data::page::{Page, PageDataLayout, PageFileMetadata, Record, RecordIterator}, table::{TableSchema, table::{Row, Table}}, tree::store::{BTreeStore, BTreeStoreError}};
+use crate::{data::page::{Page, PageDataLayout, PageError, PageFileMetadata, Record, RecordIterator}, table::{TableSchema, table::{Row, Table}}, tree::store::{BTreeStore, BTreeStoreError}};
 
 // Store is always owned by a Database instance
 // ToDo:
@@ -157,5 +157,11 @@ impl From<std::io::Error> for StoreError {
 impl From<BTreeStoreError> for StoreError {
     fn from(err: BTreeStoreError) -> Self {
         StoreError::ReadBTreeStoreError(err.to_string())
+    }
+}
+
+impl From<PageError> for StoreError {
+    fn from(err: PageError) -> Self {
+        StoreError::IoError(err.to_string())
     }
 }

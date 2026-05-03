@@ -24,6 +24,8 @@ pub enum TableAccessError {
     UpdateRowsError(String),
     #[error("TableAccessError - delete error: {0}")]
     DeleteRowsError(String),
+    #[error("TableAccessError - IO error: {0}")]
+    IOError(String),
 }
 
 struct UpdateIndexCommand {
@@ -206,6 +208,7 @@ impl From<PageError> for TableAccessError {
             PageError::InsertRowError => TableAccessError::InsertRowError("Failed to insert row into page.".to_string()),
             PageError::ReadPageError => TableAccessError::LoadRowsError("Failed to read page.".to_string()),
             PageError::UpdateRecordError => TableAccessError::LoadRowsError("Failed to update page.".to_string()),
+            PageError::DeserializationError(e) => TableAccessError::IOError(e),
         }
     }
 }

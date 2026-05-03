@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{array::TryFromSliceError, rc::Rc};
 
 use thiserror::Error;
 
@@ -65,6 +65,18 @@ impl PageDataLayout {
 
 }
 
+#[derive(Debug, Error)]
+pub enum ReadMetadataError {
+    #[error("Cannot deserialize PageFileMetadata: {0}")]
+    DeserializationError(String)
+}
+
+impl From<TryFromSliceError> for ReadMetadataError {
+    fn from(err: TryFromSliceError) -> Self {
+        ReadMetadataError::DeserializationError(err.to_string())
+    }
+}
+
 // TODO: This is really confusing
 // PageFileMetadata is actually the meta data of the complete heap file
 // should maybe not live here. Is more an implementation detail of Store and how the store handles page IDs
@@ -81,13 +93,13 @@ impl PageFileMetadata {
             number_of_pages: 0,
         }
     }
-    pub fn deserialize(buf: &[u8]) -> Self {
-        let next_id = i32::from_be_bytes(buf[0..4].try_into().unwrap());
-        let number_of_pages = i32::from_be_bytes(buf[4..8].try_into().unwrap());
-        Self {
+    pub fn deserialize(buf: &[u8]) -> Result<Self, ReadMetadataError> {
+        let next_id = i32::from_be_bytes(buf[0..4].try_into()?);
+        let number_of_pages = i32::from_be_bytes(buf[4..8].try_into()?);
+        Ok(Self {
             next_id,
             number_of_pages,
-        }
+        })
     }
     pub fn serialize(&self, layout: &PageDataLayout) -> Vec<u8> {
         let mut buf = vec![0u8; layout.metadata_size()];
@@ -264,6 +276,14 @@ pub enum PageError {
     ReadPageError,
     #[error("Failed to update record")]
     UpdateRecordError,
+    #[error("Failed to deserialize page: {0}")]
+    DeserializationError(String)
+}
+
+impl From<TryFromSliceError> for PageError {
+    fn from(value: TryFromSliceError) -> Self {
+        PageError::DeserializationError(value.to_string())
+    }
 }
 
 #[cfg(target_pointer_width = "64")] // so that I can use always 8 bytes for usize
@@ -518,22 +538,22 @@ impl<'database> Page<'database> {
         buf
     }
 
-    pub fn deserialize(buf: &[u8], layout: &'database PageDataLayout) -> Self {
+    pub fn deserialize(buf: &[u8], layout: &'database PageDataLayout) -> Result<Self, PageError> {
         let num_rows = u16::from_be_bytes(
-            buf[PageDataLayout::INDEX_NUMBER_ROWS..PageDataLayout::INDEX_ROW_OFFSET].try_into().unwrap()
+            buf[PageDataLayout::INDEX_NUMBER_ROWS..PageDataLayout::INDEX_ROW_OFFSET].try_into()?
         );
 
         let offset = i32::from_be_bytes(
-            buf[PageDataLayout::INDEX_ROW_OFFSET..PageDataLayout::INDEX_PAGE_ID].try_into().unwrap()
+            buf[PageDataLayout::INDEX_ROW_OFFSET..PageDataLayout::INDEX_PAGE_ID].try_into()?
         
         );
 
         let page_id = i32::from_be_bytes(
-            buf[PageDataLayout::INDEX_PAGE_ID..PageDataLayout::INDEX_FREE_SLOTS_OFFSET].try_into().unwrap()
+            buf[PageDataLayout::INDEX_PAGE_ID..PageDataLayout::INDEX_FREE_SLOTS_OFFSET].try_into()?
         );
 
         let free_slots_offset = i32::from_be_bytes(
-            buf[PageDataLayout::INDEX_FREE_SLOTS_OFFSET..PageDataLayout::INDEX_FREE_SLOTS_OFFSET + 4].try_into().unwrap()
+            buf[PageDataLayout::INDEX_FREE_SLOTS_OFFSET..PageDataLayout::INDEX_FREE_SLOTS_OFFSET + 4].try_into()?
         ) as usize;
 
         let data = buf[PageDataLayout::INDEX_FREE_SLOTS_OFFSET + 4..layout.page_size()].to_vec();
@@ -542,17 +562,17 @@ impl<'database> Page<'database> {
             .chunks_exact(7)
             .map(|chunk| {
                 let deleted = if chunk[0] == 1 { true } else { false };
-                let offset = u32::from_be_bytes(chunk[1..5].try_into().unwrap()) as usize;
-                let length = u16::from_be_bytes(chunk[5..7].try_into().unwrap());
+                let offset = u32::from_be_bytes(chunk[1..5].try_into()?) as usize;
+                let length = u16::from_be_bytes(chunk[5..7].try_into()?);
                 let slot = Slot {
                     page_offset: offset,
                     record_length: length,
                     deleted,
                 };
-                slot
-            }).collect();
+                Ok(slot)
+            }).collect::<Result<Vec<Slot>, TryFromSliceError>>()?;
 
-        Self {
+        Ok(Self {
             layout,
             number_of_records: num_rows,
             data_offset: offset as usize,
@@ -560,7 +580,7 @@ impl<'database> Page<'database> {
             data,
             slots: free_slots,
             slots_offset: free_slots_offset,
-        }
+        })
     }
 }
 
@@ -607,7 +627,7 @@ mod tests {
         let ser_page = page.serialize();
         let record = page.record_iterator().find(|v| v.data.data()[0] == 2).unwrap();
 
-        let mut page = Page::deserialize(&ser_page, &layout);
+        let mut page = Page::deserialize(&ser_page, &layout).unwrap();
         page.write_record(record.record_index, vec![2, 2, 2, 2]).unwrap();
         let record = page.record_iterator().find(|v| v.data.data()[0] == 2).unwrap();
         assert_eq!(record.data.data(), &[2, 2, 2, 2]);
@@ -667,7 +687,7 @@ mod tests {
         // act: serialize
         let bytes = page.serialize();
 
-        let deserialized_page = Page::deserialize(&bytes, &layout);
+        let deserialized_page = Page::deserialize(&bytes, &layout).unwrap();
 
         assert_eq!(deserialized_page.page_id, 1);
         // 32 - 14(header) = 18
@@ -698,7 +718,7 @@ mod tests {
 
         // act: serialize + deserialize
         let bytes = page.serialize();
-        let deserialized_page = Page::deserialize(&bytes, &layout);
+        let deserialized_page = Page::deserialize(&bytes, &layout).unwrap();
 
         assert_eq!(deserialized_page.page_id, 1);
         // 64 - 14(header) = 50

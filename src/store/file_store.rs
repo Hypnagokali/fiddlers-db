@@ -76,13 +76,15 @@ impl Store for FileStore {
 
         let fmeta = file.metadata().unwrap();
         if fmeta.len() < layout.metadata_size() as u64 {
-            return Err(StoreError::IoError("Metadata size is smaller than expected".to_string()));
+            return Err(StoreError::IoError("File size is smaller than expected metadata size".to_string()));
         }
 
         let mut buf = vec![0u8; layout.metadata_size()];
         file.read_exact(&mut buf)?;
 
-        Ok(PageFileMetadata::deserialize(&buf))
+        Ok(PageFileMetadata::deserialize(&buf)
+                .map_err(|e| StoreError::IoError(e.to_string()))?
+        )
     }
 
     fn read_page<'database>(&self, layout: &'database PageDataLayout, page_id: i32, page_storage: &dyn PageStorage) -> Result<Page<'database>, StoreError> {
@@ -102,7 +104,7 @@ impl Store for FileStore {
     
         file.read_exact(&mut page_data)?;
 
-        let p = Page::deserialize(&page_data, layout);
+        let p = Page::deserialize(&page_data, layout)?;
         Ok(p)
     }
 
@@ -206,17 +208,28 @@ impl<'db, S: Store> Iterator for FilePageIterator<'db, S> {
         let mut buf = vec![0u8; self.layout.page_size()];
         if let Some(reader) = self.reader.as_mut() {
             if let Some(_) = reader.read(&mut buf).ok() {
-                page = Page::deserialize(&buf, self.layout);
+                // TODO convert to optional and LOG error
+                page = Page::deserialize(&buf, self.layout)
+                        .map_err(|e| {
+                        // LOG error
+                        e
+                    }).ok();
             } else {
                 return None;
             }
 
         } else {
-            page = self.store.read_page(self.layout, self.current_page_id, self.table).unwrap();
+            // TODO convert to optional and LOG error
+            page = self.store.read_page(self.layout, self.current_page_id, self.table)
+                .map_err(|e| {
+                    // LOG error
+                    e
+                }).ok();
         }
 
         self.current_page_id += 1;
-        Some(page)
+        
+        page
     }
 }
 
