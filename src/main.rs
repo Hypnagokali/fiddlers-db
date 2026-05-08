@@ -109,7 +109,7 @@ fn print_benchmark(label: &str, repetitions: usize, result: &BenchmarkResult) {
 }
 
 fn main() {
-    let db = Database::new("testdb");
+    let db = Database::new("testdb").unwrap();
     // create_table_persons(&db);
 
     let repetitions = 1000;
@@ -129,13 +129,13 @@ fn main() {
 
         // Indexed queries
         let idx_result = benchmark_queries(&query_ids, |id| {
-            tbl_acc.find("id", Cell::Int(id)).unwrap().rows().len()
+            tbl_acc.find("id", Cell::Int(id)).unwrap().rows().unwrap().len()
         });
         print_benchmark("query result (unique index used)", repetitions, &idx_result);
 
         // Sequential scan queries
         let seq_result = benchmark_queries(&query_ids, |id| {
-            tbl_acc.find("number", Cell::Int(120 + id)).unwrap().rows().len()
+            tbl_acc.find("number", Cell::Int(120 + id)).unwrap().rows().unwrap().len()
         });
 
         println!("Run {}:", run);

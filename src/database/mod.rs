@@ -5,7 +5,7 @@ use std::{cell::RefCell, fs::create_dir, num::ParseIntError, path::Path};
 
 use thiserror::Error;
 
-use crate::{data::page::PageDataLayout, database::{seq_access::{SeqAccess, SeqAccessError}, table_access::{TableAccess, TableAccessError}}, fsm::fsm::Fsm, store::{Store, StoreError, file_store::FileStore}, table::{Column, ColumnType, TableSchema, table::{Cell, Row, Table}}, tree::store::BTreeStore};
+use crate::{data::page::{PageDataLayout, PageDataLayoutError}, database::{seq_access::{SeqAccess, SeqAccessError}, table_access::{TableAccess, TableAccessError}}, fsm::fsm::Fsm, store::{Store, StoreError, file_store::FileStore}, table::{Column, ColumnType, TableSchema, table::{Cell, Row, Table}}, tree::store::BTreeStore};
 
 // TODO: define constants for system catalog
 // Not a good solution for NULL, but very simple for now (see comment in btree module)
@@ -22,24 +22,20 @@ pub struct Database<S: Store> {
 
 #[derive(Debug, Error)]
 pub enum DatabaseError {
-    #[error("Database unknown error: {0}")]
-    UnknownError(String),
+    #[error("Invalid database name: {0}")]
+    InvalidName(String),
     #[error("Table not found: {0}")]
     TableNotFound(String),
     #[error("Corrupted database: {0}")]
     CorruptedDatabase(String),
-}
-
-impl From<StoreError> for DatabaseError {
-    fn from(err: StoreError) -> Self {
-        DatabaseError::UnknownError(err.to_string())
-    }
-}
-
-impl From<TableAccessError> for DatabaseError {
-    fn from(err: TableAccessError) -> Self {
-        DatabaseError::UnknownError(err.to_string())
-    }
+    #[error("Database store error")]
+    Store(#[from] StoreError),
+    #[error("Database table access error")]
+    TableAccess(#[from] TableAccessError),
+    #[error("Database I/O error")]
+    Io(#[from] std::io::Error),
+    #[error("Database page layout error")]
+    PageLayout(#[from] PageDataLayoutError),
 }
 
 pub struct CreateColumnCommand {
@@ -124,41 +120,43 @@ fn is_safe_dir_name(name: &str) -> bool {
 }
 
 impl Database<FileStore> {
-    pub fn new(name: &str) -> Self {
+    pub fn new(name: &str) -> Result<Self, DatabaseError> {
         let mut do_init = false;
         if !is_safe_dir_name(name) {
-            panic!("Database names only allow alphanumeric chars and '_', '-'");
+            return Err(DatabaseError::InvalidName(
+                "Database names only allow alphanumeric chars and '_', '-'".to_owned(),
+            ));
         }
         let path = Path::new(".").join(name);
 
         if !path.exists() {
-            create_dir(path.clone()).expect("Could not create database directory");
+            create_dir(path.clone())?;
             do_init = true;
         }
 
-        let store = FileStore::new(&path);
+        let store = FileStore::new(&path)?;
 
         let db = Self {
             store,
             name: name.to_owned(),
-            layout: PageDataLayout::new(PAGE_SIZE).unwrap(),
+            layout: PageDataLayout::new(PAGE_SIZE)?,
         };
 
         if do_init {
-            db.init().unwrap();
+            db.init()?;
         }
 
-        db
+        Ok(db)
     }
 }
 
 impl<S: Store> Database<S> {
-    pub fn new_with_store(name: &str, store: S) -> Self {
-        Self {
+    pub fn new_with_store(name: &str, store: S) -> Result<Self, DatabaseError> {
+        Ok(Self {
             name: name.to_string(),
             store,
-            layout: PageDataLayout::new(PAGE_SIZE).unwrap(),
-        }
+            layout: PageDataLayout::new(PAGE_SIZE)?,
+        })
     }
 
     pub fn drop_create(&self) -> Result<(), DatabaseError> {
@@ -465,7 +463,7 @@ impl<S: Store> Database<S> {
 
             // indexed_columns:
             // Vec of items column_id and BTree stores (Vec<i32, BTreeStore>)
-            let indexed_columns = indexes.rows().into_iter().map(|(_, row)| {
+            let indexed_columns = indexes.rows()?.into_iter().map(|(_, row)| {
                 let btree_id = match &row.cells()[id_idx] {
                     Cell::Int(val) => val,
                     _ => {
@@ -512,7 +510,7 @@ impl<S: Store> Database<S> {
         let table_query = access.find("name", Cell::Varchar(table_name.to_owned()))?;
         let table_id_index = table_query.schema().find_index_by_name("id")
             .ok_or_else(|| DatabaseError::CorruptedDatabase("Column 'id' not found in 'tables' table".to_owned()))?;
-        let rows = table_query.rows();
+        let rows = table_query.rows()?;
 
         if rows.len() == 0 {
             return Err(DatabaseError::TableNotFound(table_name.to_owned()));
@@ -541,7 +539,7 @@ impl<S: Store> Database<S> {
         let length_index = col_schema.find_index_by_name("length")
             .ok_or_else(|| DatabaseError::CorruptedDatabase("Column 'length' not found in 'columns' table".to_owned()))?;
 
-        let col_rows = col_query.rows().into_iter()
+        let col_rows = col_query.rows()?.into_iter()
             .map(|(_, row)| {
                 let id = match &row.cells()[id_index] {
                     Cell::Int(val) => val,
@@ -617,7 +615,7 @@ impl<S: Store> Database<S> {
             "name",
             Cell::Varchar(name.to_owned())
         )?;
-        if existing_table_query.rows().len() > 0 {
+        if !existing_table_query.rows()?.is_empty() {
             return Err(CreateTableError::TableAlreadyExists);
         }
 
@@ -716,8 +714,8 @@ mod tests {
     fn should_contain_base_tables_after_init_db() {
         // Arrange
         let base_path = tempfile::tempdir().unwrap();
-        let store = FileStore::new(base_path.path());
-        let db = Database::new_with_store("test_db", store);
+        let store = FileStore::new(base_path.path()).unwrap();
+        let db = Database::new_with_store("test_db", store).unwrap();
         
         // Act
         db.drop_create().unwrap();
@@ -725,7 +723,7 @@ mod tests {
         // Assert
         let table_tables = db.read_table("tables").unwrap();
         let access = db.table_access(table_tables).unwrap();
-        let table_entries = access.find_all().unwrap().rows()
+        let table_entries = access.find_all().unwrap().rows().unwrap()
             .into_iter()
             .map(|(_, row)| row)
             .collect::<Vec<Row>>();
@@ -738,7 +736,7 @@ mod tests {
 
         let table_tables = db.read_table("columns").unwrap();
         let access = db.table_access(table_tables).unwrap();
-        let column_entries = access.find_all().unwrap().rows()
+        let column_entries = access.find_all().unwrap().rows().unwrap()
             .into_iter()
             .map(|(_, row)| row)
             .collect::<Vec<Row>>();
@@ -769,8 +767,8 @@ mod tests {
     fn should_be_able_to_find_table_after_created() {
         // Arrange Database
         let base_path = tempfile::tempdir().unwrap();
-        let store = FileStore::new(base_path.path());
-        let db = Database::new_with_store("test_db", store);
+        let store = FileStore::new(base_path.path()).unwrap();
+        let db = Database::new_with_store("test_db", store).unwrap();
         
         // Act        
         db.drop_create().unwrap();
@@ -790,7 +788,7 @@ mod tests {
         ])).unwrap();
 
         let query_result = access.find("id", Cell::Int(1)).unwrap();
-        let rows = query_result.rows();
+        let rows = query_result.rows().unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].1.cells(), &[Cell::Int(1), Cell::Varchar("Alice".to_owned()), Cell::Int(30)]);
 
@@ -808,8 +806,8 @@ mod tests {
     fn should_be_deleted_completely_after_dropped() {
         // Arrange Database
         let base_path = tempfile::tempdir().unwrap();
-        let store = FileStore::new(base_path.path());
-        let db = Database::new_with_store("test_db", store);
+        let store = FileStore::new(base_path.path()).unwrap();
+        let db = Database::new_with_store("test_db", store).unwrap();
         
         // Act        
         db.drop_create().unwrap();
@@ -836,12 +834,12 @@ mod tests {
         let tbl_table = db.read_table("tables").unwrap();
         let access = db.table_access(tbl_table).unwrap();
         let query_result = access.find("name", Cell::Varchar("persons".to_owned())).unwrap();
-        assert_eq!(query_result.rows().len(), 0);
+        assert_eq!(query_result.rows().unwrap().len(), 0);
 
         let col_table = db.read_table("columns").unwrap();
         let col_access = db.table_access(col_table).unwrap();
         let query_result = col_access.find("t_id", Cell::Int(table_id)).unwrap();
-        assert_eq!(query_result.rows().len(), 0);
+        assert_eq!(query_result.rows().unwrap().len(), 0);
     }
 
 }
