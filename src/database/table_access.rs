@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::{HashMap, VecDeque}, iter::Once};
+use std::{cell::RefCell, collections::HashMap, iter::Once};
 
 use thiserror::Error;
 
@@ -566,7 +566,7 @@ mod tests {
 
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
-        let store = FileStore::new(base_dir.path());
+        let store = FileStore::new(base_dir.path()).unwrap();
         let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
         
@@ -603,7 +603,7 @@ mod tests {
 
         // Assert: Only row with value = "Hare" should remain
         let result = access.find_all().unwrap();
-        let rows = result.rows();
+        let rows = result.rows().unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].1.cells(), &[Cell::Varchar("Hare".to_owned()), Cell::Int(82)]);
     }
@@ -617,7 +617,7 @@ mod tests {
 
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
-        let store = FileStore::new(base_dir.path());
+        let store = FileStore::new(base_dir.path()).unwrap();
         let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
@@ -654,12 +654,12 @@ mod tests {
 
         // Assert: row with value "Rabbit" shouldn't exist anymore
         let result = access.find("value", Cell::Varchar("Rabbit".to_owned())).unwrap();
-        let rows = result.rows();
+        let rows = result.rows().unwrap();
         assert_eq!(rows.len(), 0);
 
         // Assert: row with value "Bear" exists instead
         let result = access.find("value", Cell::Varchar("Bear".to_owned())).unwrap();
-        let rows = result.rows();
+        let rows = result.rows().unwrap();
 
         assert_eq!(rows.len(), 3);
     }
@@ -673,7 +673,7 @@ mod tests {
 
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
-        let store = FileStore::new(base_dir.path());
+        let store = FileStore::new(base_dir.path()).unwrap();
         let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
@@ -699,12 +699,12 @@ mod tests {
 
         // Assert: row with value "Rabbit" shouldn't exist anymore
         let result = access.find("value", Cell::Varchar("Rabbit".to_owned())).unwrap();
-        let rows = result.rows();
+        let rows = result.rows().unwrap();
         assert_eq!(rows.len(), 0);
 
         // Assert: row with value "Bear" exists instead
         let result = access.find("value", Cell::Varchar("Bear".to_owned())).unwrap();
-        let rows = result.rows();
+        let rows = result.rows().unwrap();
         assert_eq!(rows.len(), 1);
     }
 
@@ -717,7 +717,7 @@ mod tests {
 
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
-        let store = FileStore::new(base_dir.path());
+        let store = FileStore::new(base_dir.path()).unwrap();
         let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
@@ -746,7 +746,7 @@ mod tests {
         let err = res.unwrap_err();
         assert!(err.to_string().contains("Unique key constraint"));
 
-        let rows = access.find_all().unwrap().rows();
+        let rows = access.find_all().unwrap().rows().unwrap();
         assert_eq!(rows.len(), 1);
     }
 
@@ -759,7 +759,7 @@ mod tests {
 
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
-        let store = FileStore::new(base_dir.path());
+        let store = FileStore::new(base_dir.path()).unwrap();
         let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
@@ -786,7 +786,7 @@ mod tests {
         let page = store.read_page(&layout, page_id, &table).unwrap();
 
         let row = page.read_slot(slot_id as usize)
-            .map(|data| Row::deserialize(data, table.schema())).unwrap();
+            .map(|data| Row::deserialize(data, table.schema())).unwrap().unwrap();
 
         let cells = row.cells();
         assert_eq!(cells, &vec![Cell::Int(42), Cell::Byte(1)]);
@@ -801,7 +801,7 @@ mod tests {
 
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
-        let store = FileStore::new(base_dir.path());
+        let store = FileStore::new(base_dir.path()).unwrap();
         let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
@@ -823,7 +823,7 @@ mod tests {
         let indexes_used = access.index_used.borrow();
         assert_eq!(*indexes_used, vec![42]);
 
-        let rows = query.rows();
+        let rows = query.rows().unwrap();
         let cells = rows[0].1.cells();
 
         assert_eq!(
@@ -845,7 +845,7 @@ mod tests {
 
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
-        let store = FileStore::new(base_dir.path());
+        let store = FileStore::new(base_dir.path()).unwrap();
         let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
@@ -880,7 +880,7 @@ mod tests {
 
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
-        let store = FileStore::new(base_dir.path());
+        let store = FileStore::new(base_dir.path()).unwrap();
         // Small page size, so we will have 2 pages (14 bytes header, 5 bytes row + 7 bytes slot size)
         let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
@@ -920,7 +920,7 @@ mod tests {
 
         let next = iter.next();
         assert!(next.is_some());
-        let next_row = next.unwrap();
+        let next_row = next.unwrap().unwrap();
         let cells = next_row.1.cells();
         assert_eq!(cells, &vec![Cell::Int(99), Cell::Byte(2)]);
         assert!(iter.next().is_none());
@@ -935,7 +935,7 @@ mod tests {
 
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
-        let store = FileStore::new(base_dir.path());
+        let store = FileStore::new(base_dir.path()).unwrap();
         // Small page size, so we will have 2 pages (14 bytes header, 5 bytes row + 7 bytes slot size)
         let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
@@ -962,12 +962,12 @@ mod tests {
 
         // Assert: row with value 88 shouldn't exist anymore
         let result = access.find("value", Cell::Int(82)).unwrap();
-        let rows = result.rows();
+        let rows = result.rows().unwrap();
         assert_eq!(rows.len(), 0);
 
         // Assert: row with value 99 exists instead
         let result = access.find("value", Cell::Int(99)).unwrap();
-        let rows = result.rows();
+        let rows = result.rows().unwrap();
         assert_eq!(rows.len(), 1);
     }
 
@@ -980,7 +980,7 @@ mod tests {
 
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
-        let store = FileStore::new(base_dir.path());
+        let store = FileStore::new(base_dir.path()).unwrap();
         let layout = PageDataLayout::new(256).unwrap();
         store.create(&layout, &table).unwrap();
 
@@ -999,7 +999,7 @@ mod tests {
         access.insert(&second_row).unwrap();
 
         let result = access.find_all().unwrap();
-        let rows = result.rows().into_iter().map(|(_, row)| row).collect::<Vec<Row>>();
+        let rows = result.rows().unwrap().into_iter().map(|(_, row)| row).collect::<Vec<Row>>();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].cells(), &[Cell::Varchar("Hans".to_owned())]);
         assert_eq!(rows[1].cells(), &[Cell::Varchar("Rabbit".to_owned())]);
@@ -1014,7 +1014,7 @@ mod tests {
 
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
-        let store = FileStore::new(base_dir.path());
+        let store = FileStore::new(base_dir.path()).unwrap();
         let layout = PageDataLayout::new(256).unwrap();
 
         store.create(&layout, &table).unwrap();
@@ -1037,7 +1037,7 @@ mod tests {
         access.insert(&second_row).unwrap();
 
         let result = access.find("name", Cell::Varchar("Hans".to_owned())).unwrap();
-        let rows = result.rows();
+        let rows = result.rows().unwrap();
         assert_eq!(rows.len(), 1);
         let row = rows.get(0).unwrap();
         assert!(matches!(row.1.cells().as_slice(), [Cell::Int(id), Cell::Varchar(name)] if *id == 1 && name == "Hans"));
@@ -1052,7 +1052,7 @@ mod tests {
 
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
-        let store = FileStore::new(base_dir.path());
+        let store = FileStore::new(base_dir.path()).unwrap();
         let layout = PageDataLayout::new(256).unwrap();
         
         store.create(&layout, &table).unwrap();
@@ -1076,7 +1076,7 @@ mod tests {
         access.insert(&second_row).unwrap();
 
         let result = access.find("name", Cell::Varchar("Hans".to_owned())).unwrap();
-        let rows = result.rows();
+        let rows = result.rows().unwrap();
         assert_eq!(rows.len(), 2);
         let row = rows.get(0).unwrap();
         assert!(matches!(row.1.cells().as_slice(), [Cell::Int(id), Cell::Varchar(name)] if *id == 1 && name == "Hans"));
@@ -1094,7 +1094,7 @@ mod tests {
 
         let table = Table::new(1, "test".to_owned(), schema);
         let base_dir = tempdir().unwrap();
-        let store = FileStore::new(base_dir.path());
+        let store = FileStore::new(base_dir.path()).unwrap();
         let layout = PageDataLayout::new(256).unwrap();
 
         store.create(&layout, &table).unwrap();
@@ -1130,7 +1130,7 @@ mod tests {
 
         let person_table = Table::new(1, "persons".to_owned(), person_schema);
         let base_dir = tempdir().unwrap();
-        let store = FileStore::new(base_dir.path());
+        let store = FileStore::new(base_dir.path()).unwrap();
         let layout: PageDataLayout = PageDataLayout::new(1024).unwrap();
 
         store.create(&layout, &person_table).unwrap();
@@ -1189,7 +1189,7 @@ mod tests {
         assert_eq!(result.schema.columns[2], Column::new(1, "person_id", ColumnType::Int));
         assert_eq!(result.schema.columns[3], Column::new(2, "address", ColumnType::Varchar(64)));
 
-        let rows = result.rows();
+        let rows = result.rows().unwrap();
         assert_eq!(rows.len(), 2);
         let cells_hans = rows[0].cells();
         assert_eq!(
