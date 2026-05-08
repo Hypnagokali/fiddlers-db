@@ -1,8 +1,41 @@
-use std::{cell::RefCell, collections::HashMap};
+use std::{cell::RefCell, collections::{HashMap, VecDeque}, iter::Once};
 
 use thiserror::Error;
 
-use crate::{data::page::{Page, PageDataLayout, PageError, Record}, fsm::fsm::Fsm, store::{IndexedRowIterator, PageRowIterator, Store}, table::{Column, TableSchema, table::{Cell, Row, RowValidationError, Table}}, tree::store::BTreeStore};
+use crate::{data::page::{Page, PageDataLayout, PageError, Record}, fsm::fsm::{Fsm, FsmError}, store::{IndexedRowIterator, PageRowIterator, Store, StoreError}, table::{Column, TableSchema, table::{Cell, Row, RowDeserializationError, RowValidationError, Table}}, tree::store::{BTreeStore, BTreeStoreError}};
+
+// This is a helper that converts an Iterator<Item = Result<Page, StoreError>>
+// to an Iterator<Item = Result<(Record, Row), StoreError>>.
+// Instead of this struct the Either crate could be used
+// But this concrete implementation is maybe easier to understand
+enum PageResultIterator {
+    Ok(PageRowIterator),
+    Err(Once<Result<(Record, Row), StoreError>>),
+}
+
+impl PageResultIterator {
+    fn new_ok(row_iter: PageRowIterator) -> Self {
+        PageResultIterator::Ok(row_iter)
+    }
+
+    fn new_err(err: StoreError) -> Self {
+        PageResultIterator::Err(std::iter::once(Err(err)))
+    }
+}
+
+impl Iterator for PageResultIterator {
+    type Item = Result<(Record, Row), StoreError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            PageResultIterator::Ok(row_iter) => row_iter.next(),
+            PageResultIterator::Err(err_once) => err_once.next(),
+        }
+    }
+}
+
+
+
 
 pub struct TableAccess<'db, S> {
     table: Table,
@@ -24,8 +57,16 @@ pub enum TableAccessError {
     UpdateRowsError(String),
     #[error("TableAccessError - delete error: {0}")]
     DeleteRowsError(String),
-    #[error("TableAccessError - IO error: {0}")]
-    IOError(String),
+    #[error("TableAccessError - store error")]
+    Store(#[from] StoreError),
+    #[error("TableAccessError - FSM error")]
+    Fsm(#[from] FsmError),
+    #[error("TableAccessError - row deserialization error")]
+    RowDeserialization(#[from] RowDeserializationError),
+    #[error("TableAccessError - B-Tree error")]
+    BTree(#[from] BTreeStoreError),
+    #[error("TableAccessError - page error")]
+    Page(#[from] PageError),
 }
 
 struct UpdateIndexCommand {
@@ -67,13 +108,13 @@ impl UpdateIndexCommand {
 }
 
 
-pub struct QueryResult<'db, I> {
-    row_iter: Box<dyn Iterator<Item = I> +'db>,
+pub struct QueryResult<'db, R> {
+    row_iter: Box<dyn Iterator<Item = Result<R, TableAccessError>> +'db>,
     schema: TableSchema,
 }
 
-impl<'db, I: 'db> QueryResult<'db, I> {
-    pub fn rows(self) -> Vec<I> {
+impl<'db, R: 'db> QueryResult<'db, R> {
+    pub fn rows(self) -> Result<Vec<R>, TableAccessError> {
         self.row_iter.into_iter().collect()
     }
 
@@ -81,8 +122,22 @@ impl<'db, I: 'db> QueryResult<'db, I> {
         &self.schema
     }
 
-    pub fn filter<F: FnMut(&I) -> bool + 'db>(self, f: F) -> QueryResult<'db, I> {
-        let iter = self.row_iter.filter(f);
+    // This filter doesn't work with indexes (it's an relic from an older version)
+    // For subqueries, it would be necessary to create a new query on TableAccess.
+    pub fn filter<F: Fn(&R) -> bool + 'db>(self, f: F) -> QueryResult<'db, R> {
+        let iter = self.row_iter.filter_map(move |res| {
+            match res {
+                Ok(record) => {
+                    if f(&record) {
+                        Some(Ok(record))
+                    } else {
+                        None
+                    }
+                },
+                Err(err) => Some(Err(err)),
+            }
+        });
+
         QueryResult { 
             row_iter: Box::new(iter),
             schema: self.schema,
@@ -95,25 +150,30 @@ impl<'db> QueryResult<'db, (Record, Row)> {
         index_iter: IndexedRowIterator<'_, S>,
         schema: TableSchema,
     ) -> QueryResult<'_, (Record, Row)> {
+        let iter = index_iter.map(|item| item.map_err(TableAccessError::from));
         QueryResult {
-            row_iter: Box::new(index_iter),
+            row_iter: Box::new(iter),
             schema: schema.clone()
         }
     }
 
-    pub fn new<I: Iterator<Item = Page<'db>> +'db>(
+    pub fn new<I: Iterator<Item = Result<Page<'db>, StoreError>> +'db>(
         page_iter: I,
         schema: TableSchema,
     ) -> QueryResult<'db, (Record, Row)> {
-
-        let schema_iter = schema.clone();
-        let i = page_iter.flat_map(move |p| {
-            PageRowIterator::new(p, schema_iter.clone())
+        let schema_for_result = schema.clone();
+        let i = page_iter.flat_map(move |page_result| {
+            match page_result {
+                Ok(page) => PageResultIterator::new_ok(PageRowIterator::new(page, schema.clone())),
+                Err(e) => PageResultIterator::new_err(e),
+            }
+        }).map(|r| {
+            r.map_err(|err| TableAccessError::Store(err))
         });
 
         QueryResult {
             row_iter: Box::new(i),
-            schema: schema.clone()
+            schema: schema_for_result.clone()
         }
     }
 
@@ -137,26 +197,34 @@ impl<'db> QueryResult<'db, (Record, Row)> {
         let mut inner_table_hashes = HashMap::new();
         
         let inner_schema = inner_query.schema.clone();
-        for (_, row) in inner_query.rows().into_iter() {
+        for (_, row) in inner_query.rows()? {
             let join_key = row.cells()[that_col_index].clone();
             inner_table_hashes.entry(join_key)
                 .or_insert_with(Vec::new)
                 .push(row);
         }
 
-        let join_iter = self.row_iter.flat_map(move |(_, row)| {            
+        let join_iter = self.row_iter.flat_map(move |res| {            
             let mut result = Vec::new();
-            if let Some(join_tuples) = inner_table_hashes.get(&row.cells()[this_col_index]) {
-                for inner_row in join_tuples {
-                    let joined_cells: Vec<Cell> = row.cells().iter()
-                    .chain(inner_row.cells().iter())
-                    .cloned()
-                    .collect();
-                    result.push(Row::new(joined_cells));
-                }
+
+            match res {
+                Ok((_, row)) => {
+                    if let Some(join_tuples) = inner_table_hashes.get(&row.cells()[this_col_index]) {
+                        for inner_row in join_tuples {
+                            let joined_cells: Vec<Cell> = row.cells().iter()
+                            .chain(inner_row.cells().iter())
+                            .cloned()
+                            .collect();
+                            result.push(Ok(Row::new(joined_cells)));
+                        }
+                    }
+                },
+                Err(e) => result.push(Err(e)),
             }
+
             result.into_iter()            
         });
+
 
         let joined_cols: Vec<Column> = self.schema.columns
             .iter()
@@ -202,17 +270,6 @@ fn find_column_for_query_by_cell(schema: &TableSchema, col_name: &str, cell: &Ce
     Ok(col_index)
 }
 
-impl From<PageError> for TableAccessError {
-    fn from(err: PageError) -> Self {
-        match err {
-            PageError::InsertRowError => TableAccessError::InsertRowError("Failed to insert row into page.".to_string()),
-            PageError::ReadPageError => TableAccessError::LoadRowsError("Failed to read page.".to_string()),
-            PageError::UpdateRecordError => TableAccessError::LoadRowsError("Failed to update page.".to_string()),
-            PageError::DeserializationError(e) => TableAccessError::IOError(e),
-        }
-    }
-}
-
 impl From<RowValidationError> for TableAccessError {
     fn from(err: RowValidationError) -> Self {
         TableAccessError::InsertRowError(format!("Row validation error: {}", err))
@@ -236,16 +293,13 @@ impl<'db, S: Store> TableAccess<'db, S> {
          }
     }
 
-    fn fsm(&self) -> Fsm<'_, S> {
-        Fsm::new(self.store, self.layout, &self.table)
+    fn fsm(&self) -> Result<Fsm<'_, S>, TableAccessError> {
+        Fsm::new(self.store, self.layout, &self.table).map_err(TableAccessError::from)
     }
 
     /// Load all rows from all pages in the table
     pub fn find_all(&'db self) -> Result<QueryResult<'db, (Record, Row)>, TableAccessError> {
-        let page_iter = self.store.seq_page_iterator(self.layout, &self.table)
-            .map_err(|_| {
-                TableAccessError::LoadRowsError("Cannot load PageIterator".to_owned())
-            })?;
+        let page_iter = self.store.seq_page_iterator(self.layout, &self.table)?;
         Ok(QueryResult::new(page_iter, self.table.schema().clone()))
     }
 
@@ -258,9 +312,12 @@ impl<'db, S: Store> TableAccess<'db, S> {
             let val = cell.expect_int("Indexed values need to be of type Int")
                 .map_err(|e| TableAccessError::LoadRowsError(e.to_string()))?;
 
-            // This will later return an Vec<(i32, i32)> for non unique indexes
+            // Currently there is only a unique index, so the query return always a single result.
+            // But the IndexedRowIterator is already designed for indexes with duplicates, that's why
+            // this returns a Vec<(i32, i32)> with only one value.
             let res = self.indexed_columns[*btree_pointer].1.borrow().find(val)
                 .map_err(|e| TableAccessError::LoadRowsError(e.to_string()))?
+                // remove this map if the index supports duplicates
                 .map(|v| vec![v])
                 .unwrap_or_default();
 
@@ -272,10 +329,7 @@ impl<'db, S: Store> TableAccess<'db, S> {
         
             Ok(qr)
         } else {
-            let page_iter = self.store.seq_page_iterator(self.layout, &self.table)
-                .map_err(|_| {
-                    TableAccessError::LoadRowsError("Cannot load PageIterator".to_owned())
-                })?;
+            let page_iter = self.store.seq_page_iterator(self.layout, &self.table)?;
             let qr = QueryResult::new(page_iter, self.table.schema().clone());
 
             Ok(qr.filter(move |(_, row)| {
@@ -286,10 +340,11 @@ impl<'db, S: Store> TableAccess<'db, S> {
 
     pub fn delete(&self, query_result: QueryResult<(Record, Row)>) -> Result<(), TableAccessError> {
         let mut page_row_map = HashMap::new();
+        let fsm = self.fsm()?;
 
         let col_index_btree_map = self.column_index_to_btree_pointer_map()?;
 
-        for (record, row) in query_result.rows() {
+        for (record, row) in query_result.rows()? {
             let delete_tuples = page_row_map.entry(*record.page_id()).or_insert(Vec::new());
             let mut uic = UpdateIndexCommand::new();
 
@@ -313,7 +368,7 @@ impl<'db, S: Store> TableAccess<'db, S> {
                 self.store.write_page(self.layout, &page, &self.table)
                     .map_err(|e| TableAccessError::DeleteRowsError(e.to_string()))?;
 
-                self.fsm().update(&page);
+                fsm.update(&page)?;
             }
         }
 
@@ -350,6 +405,7 @@ impl<'db, S: Store> TableAccess<'db, S> {
         if query_result.schema != *self.table.schema() {
             return Err(TableAccessError::UpdateRowsError("QueryResult schema does not match the schema of the table that is supposed to be updated".to_string()));
         }
+        let fsm = self.fsm()?;
 
         // Mapping column index (schema) to the index of the Vec where the BTree is located
         let index_to_btree_pointer_map = self.column_index_to_btree_pointer_map()?;
@@ -368,7 +424,7 @@ impl<'db, S: Store> TableAccess<'db, S> {
         let mut updated_rows_map: HashMap<i32, Vec<(Record, Row, UpdateIndexCommand)>> = HashMap::new();
 
 
-        for (record, row) in query_result.rows() {
+        for (record, row) in query_result.rows()? {
             let mut updated_cells = Vec::new();
             let mut index_update_cmd = UpdateIndexCommand::new();
             for (queried_cell_index, old_cell) in row.cells().iter().enumerate() {
@@ -421,7 +477,7 @@ impl<'db, S: Store> TableAccess<'db, S> {
                     self.store.write_page(self.layout, &page, &self.table)
                         .map_err(|_| TableAccessError::UpdateRowsError("Reinsert update error: cannot write page".to_string()))?;
                     
-                    self.fsm().update(&page);
+                    fsm.update(&page)?;
                 }
             } else {
                 // easy peasy in place update
@@ -453,7 +509,8 @@ impl<'db, S: Store> TableAccess<'db, S> {
     // Uses FSM to find a page that has enough space
     /// Returns (page_id, slot_id)
     fn raw_insert<B: FnOnce(&Self, (i32, usize)) -> Result<(), TableAccessError>>(&self, row_data: Vec<u8>, before_saving_hook: B) -> Result<(i32, usize), TableAccessError> {
-        let mut page = self.fsm().find_available_page(row_data.len());
+        let fsm = self.fsm()?;
+        let mut page = fsm.find_available_page(row_data.len())?;
 
         if !page.can_insert(&row_data) {
             return Err(TableAccessError::InsertRowError("Critical: FSM returned page with too little space. Likely a corruption of FSM.".to_owned()))
@@ -466,7 +523,7 @@ impl<'db, S: Store> TableAccess<'db, S> {
         self.store.write_page(self.layout, &page, &self.table)
             .map_err(|e| TableAccessError::InsertRowError(format!("Cannot write page: {}", e.to_string())))?;
 
-        self.fsm().update(&page);
+        fsm.update(&page)?;
 
         Ok((page.page_id(), slot_id))
     }

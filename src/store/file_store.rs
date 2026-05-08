@@ -9,14 +9,16 @@ pub struct FileStore {
     base_path: PathBuf,
 }
 impl FileStore {
-    pub fn new(base_path: &Path) -> Self {
+    pub fn new(base_path: &Path) -> Result<Self, StoreError> {
         if !base_path.is_dir() {
-            // TODO: Use proper error handling
-            panic!("FileStore needs a directory as a base_path");
+            return Err(StoreError::InvalidBasePath(format!(
+                "FileStore needs a directory as a base_path: {}",
+                base_path.display()
+            )));
         }
-        Self { 
+        Ok(Self {
             base_path: base_path.to_path_buf(),
-         }
+        })
     }
 
     fn file_path(&self, page_storage: &dyn PageStorage) -> PathBuf {
@@ -24,9 +26,7 @@ impl FileStore {
     }
 
     fn delete_file(&self, page_storage: &dyn PageStorage) -> Result<(), StoreError> {
-        remove_file(self.file_path(page_storage))
-            .map_err(|e| StoreError::IoError(e.to_string()))?;
-
+        remove_file(self.file_path(page_storage))?;
         Ok(())
     }
 
@@ -67,29 +67,33 @@ impl Store for FileStore {
     fn read_metadata(&self, layout: &PageDataLayout, page_storage: &dyn PageStorage) -> Result<PageFileMetadata, StoreError> {
         let path: PathBuf = self.file_path(page_storage);
         if !path.exists() {
-            return Err(StoreError::IoError(format!("No such data structure '{}' found (forget to call create?)", page_storage.file_path())));
+            return Err(StoreError::InvalidState(format!(
+                "No such data structure '{}' found (forget to call create?)",
+                page_storage.file_path()
+            )));
         }
 
         let mut file = std::fs::OpenOptions::new()
             .read(true)
             .open(path)?;
 
-        let fmeta = file.metadata().unwrap();
+        let fmeta = file.metadata()?;
         if fmeta.len() < layout.metadata_size() as u64 {
-            return Err(StoreError::IoError("File size is smaller than expected metadata size".to_string()));
+            return Err(StoreError::InvalidBasePath("File size is smaller than expected metadata size".to_string()));
         }
 
         let mut buf = vec![0u8; layout.metadata_size()];
         file.read_exact(&mut buf)?;
 
-        Ok(PageFileMetadata::deserialize(&buf)
-                .map_err(|e| StoreError::IoError(e.to_string()))?
-        )
+        Ok(PageFileMetadata::deserialize(&buf)?)
     }
 
     fn read_page<'database>(&self, layout: &'database PageDataLayout, page_id: i32, page_storage: &dyn PageStorage) -> Result<Page<'database>, StoreError> {
         if page_id < 1 {
-            return Err(StoreError::IoError(format!("Invalid page_id ({}). page_id must be positive value and not 0", page_id)));
+            return Err(StoreError::InvalidState(format!(
+                "Invalid page_id ({}). page_id must be positive value and not 0",
+                page_id
+            )));
         }
 
         let mut page_data = vec![0; layout.page_size()];
@@ -144,12 +148,15 @@ impl Store for FileStore {
     
         let reader = BufReader::new(file);
 
-        Ok(FilePageIterator::new(page_storage, self, layout).with_reader(reader))
+        Ok(FilePageIterator::new(page_storage, self, layout)?.with_reader(reader))
     }
     
     fn create(&self, layout: &PageDataLayout, page_storage: &dyn PageStorage) -> Result<(), StoreError> {
         if std::fs::exists(self.file_path(page_storage))? {
-            return Err(StoreError::IoError(format!("Data structure '{}' already exists", page_storage.file_path())));
+            return Err(StoreError::InvalidState(format!(
+                "Data structure '{}' already exists",
+                page_storage.file_path()
+            )));
         }
         std::fs::File::create(self.file_path(page_storage))?;
         self.init(layout, page_storage)
@@ -176,18 +183,17 @@ pub struct FilePageIterator<'db, S: Store> {
 }
 
 impl<'db, S: Store> FilePageIterator<'db, S> {
-    pub fn new(table: &'db dyn PageStorage, store: &'db S, layout: &'db PageDataLayout) -> Self {
-        // ToDo: better error handling
-        let metadata = store.read_metadata(layout, table).expect("Couldn't read metadata");
+    pub fn new(table: &'db dyn PageStorage, store: &'db S, layout: &'db PageDataLayout) -> Result<Self, StoreError> {
+        let metadata = store.read_metadata(layout, table)?;
         let total_pages = metadata.number_of_pages();
-        Self {
+        Ok(Self {
             table,
             layout,
             store,
             reader: None,
             current_page_id: 1,
             total_pages,
-        }
+        })
     }
 
     pub fn with_reader(mut self, reader: BufReader<File>) -> Self {
@@ -197,39 +203,25 @@ impl<'db, S: Store> FilePageIterator<'db, S> {
 }
 
 impl<'db, S: Store> Iterator for FilePageIterator<'db, S> {
-    type Item = Page<'db>;
+    type Item = Result<Page<'db>, StoreError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.current_page_id > self.total_pages {
             return None;
         }
 
-        let page;
         let mut buf = vec![0u8; self.layout.page_size()];
-        if let Some(reader) = self.reader.as_mut() {
-            if let Some(_) = reader.read(&mut buf).ok() {
-                // TODO convert to optional and LOG error
-                page = Page::deserialize(&buf, self.layout)
-                        .map_err(|e| {
-                        // LOG error
-                        e
-                    }).ok();
-            } else {
-                return None;
-            }
-
+        let page = if let Some(reader) = self.reader.as_mut() {
+            reader.read_exact(&mut buf)
+                .map_err(StoreError::from)
+                .and_then(|_| Page::deserialize(&buf, self.layout).map_err(StoreError::from))
         } else {
-            // TODO convert to optional and LOG error
-            page = self.store.read_page(self.layout, self.current_page_id, self.table)
-                .map_err(|e| {
-                    // LOG error
-                    e
-                }).ok();
-        }
+            self.store.read_page(self.layout, self.current_page_id, self.table)
+        };
 
         self.current_page_id += 1;
-        
-        page
+
+        Some(page)
     }
 }
 
@@ -266,7 +258,7 @@ mod tests {
     #[test]
     fn should_allocate_and_write_page() {
         let dir = tempdir().unwrap();
-        let store = FileStore::new(dir.path());
+        let store = FileStore::new(dir.path()).unwrap();
 
         let layout = PageDataLayout::new(128).unwrap();
 
@@ -290,7 +282,7 @@ mod tests {
 
         let loaded_page = store.read_page(&layout, 1, &table).unwrap();
 
-        let row = Row::deserialize(loaded_page.row_data(), table.schema());
+        let row = Row::deserialize(loaded_page.row_data(), table.schema()).unwrap();
 
         assert_eq!(row.cells().len(), 1);
         matches!(row.cells().get(0).unwrap(), Cell::Int(42));
@@ -299,7 +291,7 @@ mod tests {
     #[test]
     fn should_can_allocate_twice() {
         let dir = tempdir().unwrap();
-        let store = FileStore::new(dir.path());
+        let store = FileStore::new(dir.path()).unwrap();
 
         let layout = PageDataLayout::new(128).unwrap();
 
@@ -328,7 +320,7 @@ mod tests {
         store.write_page(&layout, &second_page, &table).unwrap();
         let loaded_page = store.read_page(&layout, 2, &table).unwrap();
 
-        let row = Row::deserialize(loaded_page.row_data(), table.schema());
+        let row = Row::deserialize(loaded_page.row_data(), table.schema()).unwrap();
 
         assert_eq!(row.cells().len(), 1);
         matches!(row.cells().get(0).unwrap(), Cell::Int(42));
@@ -337,7 +329,7 @@ mod tests {
     #[test]
     fn should_be_able_to_store_arbitrary_data() {
         let dir = tempdir().unwrap();
-        let store = FileStore::new(dir.path());
+        let store = FileStore::new(dir.path()).unwrap();
 
         let layout = PageDataLayout::new(128).unwrap();
 
@@ -369,7 +361,7 @@ mod tests {
     #[test]
     fn should_iterate_over_pages() {
         let dir = tempdir().unwrap();
-        let store = FileStore::new(dir.path());
+        let store = FileStore::new(dir.path()).unwrap();
 
         let layout = PageDataLayout::new(32).unwrap();
 
@@ -390,12 +382,11 @@ mod tests {
         new_page.insert_record(row.serialize()).unwrap();
         store.write_page(&layout, &new_page, &table).unwrap();
 
-        let mut iter = FilePageIterator::new(&table, &store, &layout);
+        let mut iter = FilePageIterator::new(&table, &store, &layout).unwrap();
 
-        let page = iter.next().unwrap();
+        let page = iter.next().unwrap().unwrap();
 
         assert_eq!(page.page_id(), 1);
         matches!(page.data_offset(), 28);
     }
 }
-

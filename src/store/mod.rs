@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use thiserror::Error;
 
-use crate::{data::page::{Page, PageDataLayout, PageError, PageFileMetadata, Record, RecordIterator}, table::{TableSchema, table::{Row, Table}}, tree::store::{BTreeStore, BTreeStoreError}};
+use crate::{data::page::{Page, PageDataLayout, PageError, PageFileMetadata, ReadMetadataError, Record, RecordIterator}, table::{TableSchema, table::{Row, RowDeserializationError, Table}}, tree::store::{BTreeStore, BTreeStoreError}};
 
 // Store is always owned by a Database instance
 // ToDo:
@@ -14,7 +14,7 @@ use crate::{data::page::{Page, PageDataLayout, PageError, PageFileMetadata, Reco
 //  - Separate different concerns: raw physical layer, table related stuff (reading btree)
 //  - of course, the methods should not depend on Table, because theoretically the store can store everything
 pub trait Store {
-    type I<'db>: Iterator<Item = Page<'db>> 
+    type I<'db>: Iterator<Item = Result<Page<'db>, StoreError>>
     where
         Self: 'db;
     // This method is just a very quick solution. If the Store will still provide access to the BTree in future,
@@ -77,36 +77,32 @@ impl<'db, S: Store> IndexedRowIterator<'db, S> {
 }
 
 impl<'db, S: Store> Iterator for IndexedRowIterator<'db, S> {
-    type Item = (Record, Row);
+    type Item = Result<(Record, Row), StoreError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut res = None;
-
-        // Using loop instead, would avoid double checking is_none()
-        while res.is_none() {
+        loop {
             if let Some(record_iter) = self.record_iter.as_mut() {
-                res = record_iter.next().map(|r| {
-                    let row = Row::deserialize(r.data(), self.table.schema());
-                    (r, row)
-                });
-
-                if res.is_none() {
-                    self.record_iter = None;
+                if let Some(r) = record_iter.next() {
+                    return Some(Row::deserialize(r.data(), self.table.schema())
+                        .map(|row| (r, row))
+                        .map_err(StoreError::from));
                 }
 
+                self.record_iter = None;
+                continue;
+            }
+
+            if let Some((page_id, slots)) = self.indexes.pop() {
+                match self.store.read_page(self.layout, page_id, self.table) {
+                    Ok(page) => {
+                        self.record_iter = Some(RecordIterator::from_slots(page, slots));
+                    }
+                    Err(err) => return Some(Err(err)),
+                }
             } else {
-                let next = self.indexes.pop();
-                if let Some((page_id, slots)) = next {
-                    // Refactor unwrap here and in PageIterator as well
-                    let page = self.store.read_page(self.layout, page_id, self.table).unwrap();
-                    self.record_iter = Some(RecordIterator::from_slots(page, slots));
-                } else {
-                    return None;
-                }
+                return None;
             }
         }
-
-        res
     }
 }
 
@@ -126,42 +122,30 @@ impl PageRowIterator {
 
 impl Iterator for PageRowIterator {
     // Record is needed for accessing a slot directly (e.g., when we want to delete a row)
-    type Item = (Record, Row);
+    type Item = Result<(Record, Row), StoreError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.record_iterator.next()
-            .map(|r| {
-                let row = Row::deserialize(r.data(), &self.schema);
-
-                (r, row)
-            })
+            .map(|r| Row::deserialize(r.data(), &self.schema)
+                .map(|row| (r, row))
+                .map_err(StoreError::from))
     }
 }
 
 #[derive(Error, Debug)]
 pub enum StoreError {
-    #[error("StoreError - I/O Error: {0}")]
-    IoError(String),
-    #[error("StoreError - Deserialization Error: {0}")]
-    DeserializationError(String),
-    #[error("StoreError - Cannot read BTreeStore: {0}")]
-    ReadBTreeStoreError(String),
-}
-
-impl From<std::io::Error> for StoreError {
-    fn from(err: std::io::Error) -> Self {
-        StoreError::IoError(err.to_string())
-    }
-}
-
-impl From<BTreeStoreError> for StoreError {
-    fn from(err: BTreeStoreError) -> Self {
-        StoreError::ReadBTreeStoreError(err.to_string())
-    }
-}
-
-impl From<PageError> for StoreError {
-    fn from(err: PageError) -> Self {
-        StoreError::IoError(err.to_string())
-    }
+    #[error("Store I/O error")]
+    Io(#[from] std::io::Error),
+    #[error("Store page error")]
+    Page(#[from] PageError),
+    #[error("Store metadata error")]
+    Metadata(#[from] ReadMetadataError),
+    #[error("Store row deserialization error")]
+    RowDeserialization(#[from] RowDeserializationError),
+    #[error("Store B-Tree error")]
+    BTree(#[from] BTreeStoreError),
+    #[error("Invalid store base path: {0}")]
+    InvalidBasePath(String),
+    #[error("Invalid store state: {0}")]
+    InvalidState(String),
 }

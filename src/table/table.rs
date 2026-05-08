@@ -38,6 +38,16 @@ pub enum RowValidationError {
     VarcharTooLong(u16, String),
 }
 
+#[derive(Debug, Error)]
+pub enum RowDeserializationError {
+    #[error("Failed to deserialize column '{column}'")]
+    Cell {
+        column: String,
+        #[source]
+        source: CellDeserializationError,
+    },
+}
+
 impl Row {
     pub fn new(cells: Vec<Cell>) -> Self {
         Self {
@@ -58,17 +68,20 @@ impl Row {
         bytes
     }
 
-    // ToDo: return Result<Row, RowDeserializationError> instead of using unwrap
-    pub fn deserialize(row_data: &[u8], schema: &TableSchema) -> Self {
+    pub fn deserialize(row_data: &[u8], schema: &TableSchema) -> Result<Self, RowDeserializationError> {
         let mut cells = Vec::new();
         let mut offset = 0;
         for col in schema.columns.iter() {
-            let (cell, bytes_read) = Cell::deserialize(&row_data[offset..], &col).unwrap();
+            let (cell, bytes_read) = Cell::deserialize(&row_data[offset..], col)
+                .map_err(|source| RowDeserializationError::Cell {
+                    column: col.name.clone(),
+                    source,
+                })?;
             offset += bytes_read;
             cells.push(cell);
         }
 
-        Row { cells }
+        Ok(Row { cells })
     }
 
     pub fn validate(&self, schema: &TableSchema) -> Result<(), RowValidationError> {
@@ -270,7 +283,7 @@ mod tests {
 
         let serialized = row.serialize();
 
-        let deserialized_row = Row::deserialize(&serialized, &schema);
+        let deserialized_row = Row::deserialize(&serialized, &schema).unwrap();
         let cells = deserialized_row.cells;
 
         assert!(matches!(&cells[0], Cell::Int(42)));
