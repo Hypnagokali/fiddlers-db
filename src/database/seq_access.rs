@@ -54,7 +54,7 @@ impl<'db, S: Store> SeqAccess<'db, S> {
         let current_idx = seq_query.schema().find_index_by_name("current")
             .ok_or(SeqAccessError::NotASequence)?;
 
-        let seq = seq_query.rows();
+        let seq = seq_query.rows()?;
 
         if seq.len() == 0 {
             return Err(SeqAccessError::SequenceNotFound);
@@ -92,7 +92,7 @@ mod tests {
 
         let seq_table = Table::new(1, "sequences".to_owned(), seq_schema);
         let base_dir = tempdir().unwrap();
-        let store = FileStore::new(base_dir.path());
+        let store = FileStore::new(base_dir.path()).unwrap();
         let layout = PageDataLayout::new(1024).unwrap();
 
         store.create(&layout, &seq_table).unwrap();

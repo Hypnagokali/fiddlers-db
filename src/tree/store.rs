@@ -77,6 +77,42 @@ fn meta_data_to_bytes(store_meta_data: &StoreMetaData) -> Vec<u8> {
     metadata_bytes.to_vec()
 }
 
+fn slice_to_array_4(bytes: &[u8], field: &str) -> Result<[u8; 4], NodePagerError> {
+    bytes.try_into().map_err(|_| NodePagerError::CorruptedPage(format!("Invalid {field} field length")))
+}
+
+fn slice_to_array_2(bytes: &[u8], field: &str) -> Result<[u8; 2], BTreeStoreError> {
+    bytes.try_into().map_err(|_| BTreeStoreError::CorruptedMetadata(format!("Invalid {field} field length")))
+}
+
+fn read_node_i32(page_bytes: &[u8], start: usize, field: &str) -> Result<i32, NodePagerError> {
+    let bytes = page_bytes.get(start..start + 4)
+        .ok_or_else(|| NodePagerError::CorruptedPage(format!("Missing {field} field")))?;
+    Ok(i32::from_be_bytes(slice_to_array_4(bytes, field)?))
+}
+
+fn read_meta_i32(metadata_bytes: &[u8], start: usize, field: &str) -> Result<i32, BTreeStoreError> {
+    let bytes = metadata_bytes.get(start..start + 4)
+        .ok_or_else(|| BTreeStoreError::CorruptedMetadata(format!("Missing {field} field")))?;
+    let arr: [u8; 4] = bytes.try_into()
+        .map_err(|_| BTreeStoreError::CorruptedMetadata(format!("Invalid {field} field length")))?;
+    Ok(i32::from_be_bytes(arr))
+}
+
+fn read_meta_u32(metadata_bytes: &[u8], start: usize, field: &str) -> Result<u32, BTreeStoreError> {
+    let bytes = metadata_bytes.get(start..start + 4)
+        .ok_or_else(|| BTreeStoreError::CorruptedMetadata(format!("Missing {field} field")))?;
+    let arr: [u8; 4] = bytes.try_into()
+        .map_err(|_| BTreeStoreError::CorruptedMetadata(format!("Invalid {field} field length")))?;
+    Ok(u32::from_be_bytes(arr))
+}
+
+fn read_meta_u16(metadata_bytes: &[u8], start: usize, field: &str) -> Result<u16, BTreeStoreError> {
+    let bytes = metadata_bytes.get(start..start + 2)
+        .ok_or_else(|| BTreeStoreError::CorruptedMetadata(format!("Missing {field} field")))?;
+    Ok(u16::from_be_bytes(slice_to_array_2(bytes, field)?))
+}
+
 #[derive(Debug)]
 pub struct StoreMetaData {
     max_degree: u16,
@@ -104,15 +140,17 @@ impl StoreMetaData {
     }
 }
 
-impl From<(Vec<u8>, u16)> for NodePage {
-    fn from(page_bytes_and_degree: (Vec<u8>, u16)) -> Self {
+impl TryFrom<(Vec<u8>, u16)> for NodePage {
+    type Error = NodePagerError;
+
+    fn try_from(page_bytes_and_degree: (Vec<u8>, u16)) -> Result<Self, Self::Error> {
         let page_bytes = page_bytes_and_degree.0;
         let max_degree = page_bytes_and_degree.1;
 
-        let page_id = i32::from_be_bytes(page_bytes[POS_PAGE_ID..POS_PAGE_ID + 4].try_into().unwrap());
+        let page_id = read_node_i32(&page_bytes, POS_PAGE_ID, "page_id")?;
 
         if page_id == i32::MIN {
-            panic!("Read a page with INVALID id.");
+            return Err(NodePagerError::InvalidNodePage("Read a page with INVALID id".to_owned()));
         }
 
         let deleted = match page_bytes[POS_DELETED] {
@@ -120,15 +158,13 @@ impl From<(Vec<u8>, u16)> for NodePage {
             _ => true,
         };
 
-        let next_deleted_page = read_i32_with_null(
-            i32::from_be_bytes(page_bytes[POS_NEXT_DELETED_PAGE..POS_NEXT_DELETED_PAGE + 4].try_into().unwrap())
-        );
+        let next_deleted_page = read_i32_with_null(read_node_i32(&page_bytes, POS_NEXT_DELETED_PAGE, "next_deleted_page")?);
 
         let mut keys = Vec::new();
         let key_offset = key_offset();
         for k in 0..(max_degree - 1) {
             let next_offset = key_offset + (k as usize * 4);
-            let next_key = read_i32_with_null(i32::from_be_bytes(page_bytes[next_offset..(next_offset + 4)].try_into().unwrap()));
+            let next_key = read_i32_with_null(read_node_i32(&page_bytes, next_offset, "key")?);
             if let Some(next_key) = next_key {
                 keys.push(next_key);
             } else {
@@ -141,7 +177,7 @@ impl From<(Vec<u8>, u16)> for NodePage {
         let child_offset = children_offset(max_degree);
         for c in 0..max_degree {
             let next_offset = child_offset + (c as usize * 4);
-            let next_child = read_i32_with_null(i32::from_be_bytes(page_bytes[next_offset..(next_offset + 4)].try_into().unwrap()));
+            let next_child = read_i32_with_null(read_node_i32(&page_bytes, next_offset, "child")?);
             if let Some(next_child) = next_child {
                 children.push(next_child);
             } else {
@@ -154,10 +190,8 @@ impl From<(Vec<u8>, u16)> for NodePage {
         let value_offset = values_offset(max_degree);
         for v in 0..(max_degree - 1) {
             let next_offset = value_offset + (v as usize * 8);
-            let val1_bytes: [u8; 4] = page_bytes[next_offset..(next_offset + 4)].try_into().unwrap();
-            let val2_bytes: [u8; 4] = page_bytes[(next_offset + 4)..(next_offset + 8)].try_into().unwrap();
-            let val1 = i32::from_be_bytes(val1_bytes);
-            let val2 = i32::from_be_bytes(val2_bytes);
+            let val1 = read_node_i32(&page_bytes, next_offset, "value.0")?;
+            let val2 = read_node_i32(&page_bytes, next_offset + 4, "value.1")?;
             if val1 != i32::MIN && val2 != i32::MIN {
                 values.push((val1, val2));
             } else {
@@ -166,14 +200,9 @@ impl From<(Vec<u8>, u16)> for NodePage {
         }
 
         let next_leaf_offset = next_leaf_offset(max_degree);
-        let next_leaf = read_i32_with_null(
-            i32::from_be_bytes(page_bytes[next_leaf_offset..next_leaf_offset + 4]
-                .try_into()
-                .unwrap()
-            )
-        );
+        let next_leaf = read_i32_with_null(read_node_i32(&page_bytes, next_leaf_offset, "next_leaf")?);
 
-        NodePage::new_from_store(
+        Ok(NodePage::new_from_store(
             page_id,
             deleted,
             next_deleted_page,
@@ -181,7 +210,7 @@ impl From<(Vec<u8>, u16)> for NodePage {
             children,
             values,
             next_leaf,
-            max_degree as usize)
+            max_degree as usize))
     }
 }
 
@@ -192,9 +221,15 @@ pub struct NodePager {
 }
 
 #[derive(Debug, Error)]
-#[error("NodePager error: {msg}")]
-pub struct NodePagerError {
-    msg: String
+pub enum NodePagerError {
+    #[error("NodePager I/O error")]
+    Io(#[from] std::io::Error),
+    #[error("Invalid node page: {0}")]
+    InvalidNodePage(String),
+    #[error("Corrupted node page: {0}")]
+    CorruptedPage(String),
+    #[error("Invalid page id: {0}")]
+    InvalidPageId(String),
 }
 
 
@@ -219,7 +254,7 @@ impl NodePager {
 
     fn page_offset(&self, page_id: i32) -> Result<u64, NodePagerError> {
         if page_id < 0 {
-            return Err(NodePagerError { msg: format!("Page id must be >= 0. page_id={}", page_id) });
+            return Err(NodePagerError::InvalidPageId(format!("page_id={page_id}")));
         }
 
         Ok(META_DATA_HEADER_SIZE as u64 + (self.page_size() as u64 * page_id as u64))
@@ -230,10 +265,10 @@ impl NodePager {
             return Ok(());
         }
         if *node.id() == i32::MIN {
-            return Err(NodePagerError { msg: "Cannot save page with the id i32::MIN".to_owned() });
+            return Err(NodePagerError::InvalidNodePage("Cannot save page with the id i32::MIN".to_owned()));
         }
         if *node.deleted() {
-            return Err(NodePagerError { msg: "Cannot write deleted pages. Use delete for this operation".to_owned() });
+            return Err(NodePagerError::InvalidNodePage("Cannot write deleted pages. Use delete for this operation".to_owned()));
         }
         
         let meta_data = self.meta_data.borrow();
@@ -287,10 +322,8 @@ impl NodePager {
         );
 
         let offset = self.page_offset(*node.id())?;
-        file.seek(std::io::SeekFrom::Start(offset))
-            .map_err(|_| NodePagerError { msg: "Cannot go to offset (read_page error)".to_owned() })?;
-        file.write(&data)
-            .map_err(|e| NodePagerError { msg: format!("Cannot write NodePage: {}", e)})?;
+        file.seek(std::io::SeekFrom::Start(offset))?;
+        file.write_all(&data)?;
 
         *node.changed().borrow_mut() = false;
 
@@ -307,18 +340,15 @@ impl NodePager {
         let mut file= self.file.borrow_mut();
         let mut data = vec![0; self.page_size() as usize];
         let offset = self.page_offset(page_id)?;
-        file.seek(std::io::SeekFrom::Start(offset))
-            .map_err(|_| NodePagerError { msg: "Cannot go to offset (read_page error)".to_owned() })?;
+        file.seek(std::io::SeekFrom::Start(offset))?;
+        file.read_exact(&mut data)?;
 
-        file.read_exact(&mut data)
-            .map_err(|e| NodePagerError { msg: format!("Cannot read data (read_page). {}", e)})?;
-
-        Ok((data, self.meta_data.borrow().max_degree).into())
+        NodePage::try_from((data, self.meta_data.borrow().max_degree))
     }
 
     pub fn delete_page(&self, page_id: i32) -> Result<(), NodePagerError> {
         if page_id == i32::MIN {
-            return Err(NodePagerError { msg: "Cannot delete page_id i32::MIN".to_owned() });
+            return Err(NodePagerError::InvalidPageId("Cannot delete page_id i32::MIN".to_owned()));
         }
 
         let first_deleted_page = self.meta_data.borrow().first_deleted_page;
@@ -340,17 +370,18 @@ impl NodePager {
                     self.write_page(&allocated)?;
                     return Ok(allocated);
                 },
-                Err(e) => 
-                    return Err(
-                        NodePagerError { msg: format!("Failed to reallocate page with ID = {}, err = {}", first_deleted, e)}
-                    ),
+                Err(e) => {
+                    return Err(NodePagerError::CorruptedPage(format!(
+                        "Failed to reallocate page with ID = {first_deleted}, err = {e}"
+                    )));
+                }
             };
         } else {
             self.meta_data.borrow_mut().inc_number_of_pages();
             // first id is 0;
             let next_id = self.meta_data.borrow().number_of_pages - 1;
             let next_id = i32::try_from(next_id)
-                .map_err(|_| NodePagerError { msg: "Cannot allocate page id greater than i32::MAX".to_owned() })?;
+                .map_err(|_| NodePagerError::InvalidPageId("Cannot allocate page id greater than i32::MAX".to_owned()))?;
             let node = NodePage::new(self.meta_data.borrow().max_degree as usize, next_id);
             self.write_page(&node)?;
             // is likely to change after allocation
@@ -367,35 +398,25 @@ pub struct BTreeStore {
 }
 
 #[derive(Debug, Error)]
-#[error("B+ Tree error: {msg}")]
-pub struct BTreeStoreError {
-    msg: String
-}
-
-impl From<NodePagerError> for BTreeStoreError {
-    fn from(value: NodePagerError) -> Self {
-        Self {
-            msg: format!("BTreeStoreError occurred. err={}", value),
-        }
-    }
-}
-
-impl From<NodeOperationError> for BTreeStoreError {
-    fn from(value: NodeOperationError) -> Self {
-        Self {
-            msg: format!("BTreeStoreError occurred. err={}", value),
-        }
-    }
+pub enum BTreeStoreError {
+    #[error("B+ Tree invalid configuration: {0}")]
+    InvalidConfiguration(String),
+    #[error("B+ Tree metadata is corrupted: {0}")]
+    CorruptedMetadata(String),
+    #[error("B+ Tree pager error: {0}")]
+    NodePager(#[from] NodePagerError),
+    #[error("B+ Tree node operation error: {0}")]
+    NodeOperation(#[from] NodeOperationError),
 }
 
 impl BTreeStore {
     pub fn new(file_path: &Path, max_degree: u16) -> Result<Self, BTreeStoreError> {
         if max_degree < 4 {
-            return Err(BTreeStoreError { msg: "BTreeStore must have at least a max degree of 4".to_owned() });
+            return Err(BTreeStoreError::InvalidConfiguration("BTreeStore must have at least a max degree of 4".to_owned()));
         }
 
         if max_degree % 2 != 0 {
-            return Err(BTreeStoreError { msg: "BTreeStore must have an even number for max degree".to_owned() });
+            return Err(BTreeStoreError::InvalidConfiguration("BTreeStore must have an even number for max degree".to_owned()));
         }
 
         let store_meta_data;
@@ -407,12 +428,14 @@ impl BTreeStore {
         let file = match OpenOptions::new().read(true).write(true).open(file_path) {
             Ok(mut f) if file_size >= META_DATA_HEADER_SIZE as u64 => {
                 let mut metadata_bytes = [0u8; META_DATA_HEADER_SIZE];
-                f.read_exact(&mut metadata_bytes).expect("Cannot read meta data from file");
+                f.read_exact(&mut metadata_bytes)
+                    .map_err(NodePagerError::from)
+                    .map_err(BTreeStoreError::from)?;
 
-                let max_degree = u16::from_be_bytes(metadata_bytes[0..2].try_into().unwrap());
-                let number_of_pages = u32::from_be_bytes(metadata_bytes[2..6].try_into().unwrap());
-                let first_deleted_page = i32::from_be_bytes(metadata_bytes[6..10].try_into().unwrap());
-                let root = i32::from_be_bytes(metadata_bytes[10..14].try_into().unwrap());
+                let max_degree = read_meta_u16(&metadata_bytes, 0, "max_degree")?;
+                let number_of_pages = read_meta_u32(&metadata_bytes, 2, "number_of_pages")?;
+                let first_deleted_page = read_meta_i32(&metadata_bytes, 6, "first_deleted_page")?;
+                let root = read_meta_i32(&metadata_bytes, 10, "root")?;
 
                 store_meta_data = StoreMetaData {
                     max_degree,
@@ -431,7 +454,8 @@ impl BTreeStore {
                     .write(true)
                     .create(true)
                     .open(file_path)
-                    .expect("Failed to create file");
+                    .map_err(NodePagerError::from)
+                    .map_err(BTreeStoreError::from)?;
 
                 store_meta_data = StoreMetaData { 
                     max_degree,
@@ -444,8 +468,12 @@ impl BTreeStore {
                 
                 let metadata_bytes = meta_data_to_bytes(&store_meta_data);
 
-                f.write_all(&metadata_bytes).expect("Failed to write metadata");
-                f.flush().expect("Failed to flush metadata on INIT");
+                f.write_all(&metadata_bytes)
+                    .map_err(NodePagerError::from)
+                    .map_err(BTreeStoreError::from)?;
+                f.flush()
+                    .map_err(NodePagerError::from)
+                    .map_err(BTreeStoreError::from)?;
 
                 f
             }
@@ -566,7 +594,7 @@ impl BTreeStore {
         if root.is_full() {
             let (rnode, root_key) = root.split(&self.pager)?;
             let mut new_root = self.pager.allocate_new_page()
-                .map_err(|_| BTreeStoreError { msg: "Cannot allocate new page (op: insert)".to_owned() })?;
+                .map_err(BTreeStoreError::from)?;
             new_root.keys_mut().push(root_key);
             // root becomes the left node
             new_root.children_mut().push(*root.id());
@@ -582,7 +610,7 @@ impl BTreeStore {
         let unique = self.meta_data.borrow().unique_index;
         root.insert(&self.pager, key, value, unique)?;
         self.pager.write_page(&root)
-                .map_err(|_| BTreeStoreError { msg: "Cannot write new root (op: insert)".to_owned() })?;
+                .map_err(BTreeStoreError::from)?;
 
         self.save_metadata()?;
 
@@ -620,9 +648,11 @@ impl BTreeStore {
             let mut file = self.pager.file.borrow_mut();
 
             file.seek(std::io::SeekFrom::Start(0))
-                .map_err(|_| BTreeStoreError { msg: "Cannot seek in file (saving StoreMetaData)".to_owned() })?;
+                .map_err(NodePagerError::from)
+                .map_err(BTreeStoreError::from)?;
             file.write_all(&bytes)
-                .map_err(|_| BTreeStoreError { msg: "Cannot save StoreMetaData".to_owned() })?;
+                .map_err(NodePagerError::from)
+                .map_err(BTreeStoreError::from)?;
         }
         
         Ok(())
