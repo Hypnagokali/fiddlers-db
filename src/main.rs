@@ -1,11 +1,11 @@
 use std::time::{Duration, Instant};
 
 use rand::Rng;
-use crate::{database::Database, store::file_store::FileStore, table::{ColumnType, table::Cell, table::Row}};
+use crate::{database::Database, store::file_store::FileStore, schema::{ColumnType, table::Cell, table::Row}};
 
 // ignore dead_code while developing
 #[allow(dead_code)]
-mod table;
+mod schema;
 #[allow(dead_code)]
 mod data;
 #[allow(dead_code)]
@@ -16,7 +16,7 @@ mod database;
 mod tree;
 
 #[allow(unused)]
-mod fsm;
+mod freespace;
 
 #[allow(unused)]
 fn create_table_persons(db: &Database<FileStore>) {
@@ -30,8 +30,8 @@ fn create_table_persons(db: &Database<FileStore>) {
     let person_acc = db.table_access(persons_table.clone()).unwrap();
     let mut seq_acc = db.seq_access_for_table(persons_table).unwrap();
 
-    for i in 1..1000_000 {
-        if i % 10000 == 0 {
+    for i in 1..1_000_000 {
+        if i % 10_000 == 0 {
             println!("Added {} entries", i);
         }
         let next_id = seq_acc.next_val("id").unwrap();

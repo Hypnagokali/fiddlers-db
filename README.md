@@ -99,7 +99,7 @@ What is missing / rough edges:
 - `Store` still mixes concerns that could be split further (raw I/O vs higher-level structure lifecycle).
 - `FileStore` directly writes to the filesystem instead of using a buffer management.
 
-### `table`
+### `schema`
 Schema and row model.
 
 What it does:
@@ -130,7 +130,7 @@ Why are only int keys supported:
 Because it's just about learning the basic concepts, I decided to implement a simple B+ Tree with one fixed key type and a payload.
 To index values of different kinds and different lengths, the algorithm can no longer make a decision based on the number of keys whether the node should be split or merged, it must decide it based on the size.
 
-### `fsm`
+### `freespace`
 Free Space Map implementation.
 
 What it does:

@@ -5,7 +5,7 @@ use std::{cell::RefCell, fs::create_dir, num::ParseIntError, path::Path};
 
 use thiserror::Error;
 
-use crate::{data::page::{PageDataLayout, PageDataLayoutError}, database::{seq_access::{SeqAccess, SeqAccessError}, table_access::{TableAccess, TableAccessError}}, fsm::fsm::Fsm, store::{Store, StoreError, file_store::FileStore}, table::{Column, ColumnType, TableSchema, table::{Cell, Row, Table}}, tree::store::BTreeStore};
+use crate::{data::page::{PageDataLayout, PageDataLayoutError}, database::{seq_access::{SeqAccess, SeqAccessError}, table_access::{TableAccess, TableAccessError}}, freespace::fsm::Fsm, store::{Store, StoreError, file_store::FileStore}, schema::{Column, ColumnType, TableSchema, table::{Cell, Row, Table}}, tree::store::BTreeStore};
 
 // TODO: define constants for system catalog
 // Not a good solution for NULL, but very simple for now (see comment in btree module)
@@ -512,7 +512,7 @@ impl<S: Store> Database<S> {
             .ok_or_else(|| DatabaseError::CorruptedDatabase("Column 'id' not found in 'tables' table".to_owned()))?;
         let rows = table_query.rows()?;
 
-        if rows.len() == 0 {
+        if rows.is_empty() {
             return Err(DatabaseError::TableNotFound(table_name.to_owned()));
         }
         if rows.len() > 1 {
@@ -699,7 +699,7 @@ impl<S: Store> Database<S> {
     }
 
     fn create_fsm(&self, table: &Table) -> Result<(), CreateTableError> {
-        let fsm_access = Fsm::access(&table);
+        let fsm_access = Fsm::access(table);
         self.store.create(&self.layout, &fsm_access)?;
         Ok(())
     }
@@ -708,7 +708,7 @@ impl<S: Store> Database<S> {
 #[cfg(test)]
 mod tests {
 
-    use crate::{database::{CreateTableError, Database, DatabaseError}, store::file_store::FileStore, table::{ColumnType, table::{Cell, Row}}};
+    use crate::{database::{CreateTableError, Database, DatabaseError}, store::file_store::FileStore, schema::{ColumnType, table::{Cell, Row}}};
 
     #[test]
     fn should_contain_base_tables_after_init_db() {

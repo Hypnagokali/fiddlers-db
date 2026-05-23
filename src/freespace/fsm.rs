@@ -1,9 +1,9 @@
-//! Most of the code is taken from PostgreSQL with some modifications (e.g., use floats and rounding instead of integer division)
-//! https://github.com/postgres/postgres/tree/master/src/backend/storage/freespace
-//! Focuses on understandability.
+// Most of the code is taken from PostgreSQL with some modifications (e.g., use floats and rounding instead of integer division)
+// https://github.com/postgres/postgres/tree/master/src/backend/storage/freespace
+// Focuses on understandability, so it doesn't contain any self-healing mechanisms.
 use thiserror::Error;
 
-use crate::{data::page::{Page, PageDataLayout, PageError}, fsm::binary_tree::BinaryTree, store::{PageStorage, Store, StoreError}, table::table::Table};
+use crate::{data::page::{Page, PageDataLayout, PageError}, freespace::binary_tree::BinaryTree, store::{PageStorage, Store, StoreError}, schema::table::Table};
 
 struct FsmAccess<'db> {
     table: &'db Table,
@@ -54,9 +54,6 @@ pub enum FsmError {
     Page(#[from] PageError),
 }
 
-// Implemented with a lot of trust
-// No self healing, no check, if the page can be read as BinaryTree
-// If FSM is corrupted, the database will likely explode
 pub struct Fsm<'db, S> {
     store: &'db S,
     table: &'db Table,
@@ -379,7 +376,7 @@ impl<'db, S: Store> Fsm<'db, S> {
 mod tests {
     use tempfile::tempdir;
 
-    use crate::{data::page::PageDataLayout, fsm::{binary_tree::BinaryTree, fsm::{Fsm, FsmAccess, FsmAddress}}, store::{Store, file_store::FileStore}, table::{Column, ColumnType, TableSchema, table::Table}};
+    use crate::{data::page::PageDataLayout, freespace::{binary_tree::BinaryTree, fsm::{Fsm, FsmAccess, FsmAddress}}, store::{Store, file_store::FileStore}, schema::{Column, ColumnType, TableSchema, table::Table}};
 
     #[test]
     fn should_walk_the_tree_downwards() {

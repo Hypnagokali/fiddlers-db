@@ -229,7 +229,7 @@ impl<'db, S: Store> Iterator for FilePageIterator<'db, S> {
 mod tests {
     use tempfile::tempdir;
 
-    use crate::{data::page::PageDataLayout, store::{Store, file_store::{FilePageIterator, FileStore}}, table::{Column, ColumnType, TableSchema, table::{Cell, Row, Table}}};
+    use crate::{data::page::PageDataLayout, store::{Store, file_store::{FilePageIterator, FileStore}}, schema::{Column, ColumnType, TableSchema, table::{Cell, Row, Table}}};
 
     struct Sequence {
             col_id: i32,
