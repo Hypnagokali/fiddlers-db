@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use thiserror::Error;
 
-use crate::table::{self, ColumnType, TableSchema};
+use crate::schema::{self, ColumnType, TableSchema};
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum Cell {
@@ -207,10 +207,9 @@ impl Cell {
         }
     }
 
-    // ToDo: better error handling
     // Gets always the next slice of the row_data
     // Returns: (Cell, number of bytes read)
-    pub fn deserialize<'a>(row_data: &'a [u8], column: &table::Column) -> Result<(Self, usize), CellDeserializationError> {
+    pub fn deserialize(row_data: &[u8], column: &schema::Column) -> Result<(Self, usize), CellDeserializationError> {
         match &column.col_type {
             ColumnType::Int => {
                 if row_data.len() < 4 {
@@ -248,7 +247,7 @@ impl Cell {
                 Ok((Cell::Varchar(str_value), 2 + str_len))
             },
             ColumnType::Byte => {
-                if row_data.len() < 1 {
+                if row_data.is_empty() {
                     return Err(CellDeserializationError::InvalidData);
                 }
                 let byte_value = row_data[0];
@@ -261,7 +260,7 @@ impl Cell {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::table::Column;
+    use crate::schema::Column;
 
     #[test]
     fn should_serialize_and_deserialize_correctly() {

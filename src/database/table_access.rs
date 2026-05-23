@@ -2,7 +2,7 @@ use std::{cell::RefCell, collections::HashMap, iter::Once};
 
 use thiserror::Error;
 
-use crate::{data::page::{Page, PageDataLayout, PageError, Record}, fsm::fsm::{Fsm, FsmError}, store::{IndexedRowIterator, PageRowIterator, Store, StoreError}, table::{Column, TableSchema, table::{Cell, Row, RowDeserializationError, RowValidationError, Table}}, tree::store::{BTreeStore, BTreeStoreError}};
+use crate::{data::page::{Page, PageDataLayout, PageError, Record}, freespace::fsm::{Fsm, FsmError}, store::{IndexedRowIterator, PageRowIterator, Store, StoreError}, schema::{Column, TableSchema, table::{Cell, Row, RowDeserializationError, RowValidationError, Table}}, tree::store::{BTreeStore, BTreeStoreError}};
 
 // This is a helper that converts an Iterator<Item = Result<Page, StoreError>>
 // to an Iterator<Item = Result<(Record, Row), StoreError>>.
@@ -115,7 +115,7 @@ pub struct QueryResult<'db, R> {
 
 impl<'db, R: 'db> QueryResult<'db, R> {
     pub fn rows(self) -> Result<Vec<R>, TableAccessError> {
-        self.row_iter.into_iter().collect()
+        self.row_iter.collect()
     }
 
     pub fn schema(&self) -> &TableSchema {
@@ -168,7 +168,7 @@ impl<'db> QueryResult<'db, (Record, Row)> {
                 Err(e) => PageResultIterator::new_err(e),
             }
         }).map(|r| {
-            r.map_err(|err| TableAccessError::Store(err))
+            r.map_err(TableAccessError::Store)
         });
 
         QueryResult {
@@ -412,7 +412,7 @@ impl<'db, S: Store> TableAccess<'db, S> {
         // key: index of the column in the schema
         // value: column id and Cell with new value
         let new_values = updates.iter().map(|(col_name, cell)| {
-            let index = find_column_for_query_by_cell(&self.table.schema(), col_name, &cell)?;
+            let index = find_column_for_query_by_cell(self.table.schema(), col_name, cell)?;
             Ok((index, cell.clone()))
         }).collect::<Result<HashMap<usize, Cell>, TableAccessError>>()?;
 
@@ -447,7 +447,7 @@ impl<'db, S: Store> TableAccess<'db, S> {
             }
             let updated_row = Row::new(updated_cells);
 
-            let updated_rows_per_page = updated_rows_map.entry(*record.page_id()).or_insert(Vec::new());
+            let updated_rows_per_page = updated_rows_map.entry(*record.page_id()).or_default();
             updated_rows_per_page.push((record, updated_row, index_update_cmd));
         }
 
@@ -521,7 +521,7 @@ impl<'db, S: Store> TableAccess<'db, S> {
         before_saving_hook(self, (page.page_id(), slot_id))?;
 
         self.store.write_page(self.layout, &page, &self.table)
-            .map_err(|e| TableAccessError::InsertRowError(format!("Cannot write page: {}", e.to_string())))?;
+            .map_err(|e| TableAccessError::InsertRowError(format!("Cannot write page: {}", e)))?;
 
         fsm.update(&page)?;
 
@@ -554,7 +554,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use crate::{data::page::PageDataLayout, database::table_access::TableAccess, fsm::fsm::Fsm, store::{IndexedRowIterator, Store, file_store::FileStore}, table::{Column, ColumnType, TableSchema, table::{Cell, Row, Table}}
+    use crate::{data::page::PageDataLayout, database::table_access::TableAccess, freespace::fsm::Fsm, store::{IndexedRowIterator, Store, file_store::FileStore}, schema::{Column, ColumnType, TableSchema, table::{Cell, Row, Table}}
     };
 
     #[test]

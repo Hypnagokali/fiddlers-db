@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use thiserror::Error;
 
-use crate::{data::page::{Page, PageDataLayout, PageError, PageFileMetadata, ReadMetadataError, Record, RecordIterator}, table::{TableSchema, table::{Row, RowDeserializationError, Table}}, tree::store::{BTreeStore, BTreeStoreError}};
+use crate::{data::page::{Page, PageDataLayout, PageError, PageFileMetadata, ReadMetadataError, Record, RecordIterator}, schema::{TableSchema, table::{Row, RowDeserializationError, Table}}, tree::store::{BTreeStore, BTreeStoreError}};
 
 // Store is always owned by a Database instance
 // ToDo:

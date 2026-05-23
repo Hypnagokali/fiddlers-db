@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 /// Thin wrapper around TableAccess to provide sequence operations.
-use crate::{database::table_access::{TableAccess, TableAccessError}, store::Store, table::{ColumnType, table::{Cell, Table}}};
+use crate::{database::table_access::{TableAccess, TableAccessError}, store::Store, schema::{ColumnType, table::{Cell, Table}}};
 
 
 pub struct SeqAccess<'db, S: Store> {
@@ -56,7 +56,7 @@ impl<'db, S: Store> SeqAccess<'db, S> {
 
         let seq = seq_query.rows()?;
 
-        if seq.len() == 0 {
+        if seq.is_empty() {
             return Err(SeqAccessError::SequenceNotFound);
         }
         if seq.len() > 1 {
@@ -80,7 +80,7 @@ impl<'db, S: Store> SeqAccess<'db, S> {
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
-    use crate::{data::page::PageDataLayout, database::{seq_access::SeqAccess, table_access::TableAccess}, fsm::fsm::Fsm, store::{Store, file_store::FileStore}, table::{Column, ColumnType, TableSchema, table::{Cell, Row, Table}}};
+    use crate::{data::page::PageDataLayout, database::{seq_access::SeqAccess, table_access::TableAccess}, freespace::fsm::Fsm, store::{Store, file_store::FileStore}, schema::{Column, ColumnType, TableSchema, table::{Cell, Row, Table}}};
 
     #[test]
     fn find_should_return_error_if_cell_has_wrong_type() {

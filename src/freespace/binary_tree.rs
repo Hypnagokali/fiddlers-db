@@ -1,10 +1,11 @@
+// This is highly inspired by Postgres' FSM implementation:
+// https://github.com/postgres/postgres/blob/master/src/backend/storage/freespace/fsmpage.c
+// This implementation simplified and fills always the left most possible node. That's possible,
+// because the database is single threaded and it's not necessary to handle concurrent requests (in that case
+// it would be better not to favour the left most page to spread the locks across pages)
 use crate::{data::page::{self, PageDataLayout}, tree};
 
-/// This is highly inspired by Postgres' FSM implementation:
-/// https://github.com/postgres/postgres/blob/master/src/backend/storage/freespace/fsmpage.c
-
 pub struct BinaryTree {
-    // an reference into the page would be more efficient
     arr: Vec<u8>,
     non_leaf_nodes: usize,
     leaf_nodes: usize,
@@ -48,7 +49,7 @@ impl BinaryTree {
             // Such small page sizes are only relevant for testing.
             panic!("Page size is too small to fit the binary tree. It needs at least 64 bytes");
         }
-        let nodes = page_layout.page_data_size() - PageDataLayout::SLOT_SIZE as usize;
+        let nodes = page_layout.page_data_size() - PageDataLayout::SLOT_SIZE;
         let non_leaf_nodes = page_layout.page_size() / 2 - 1;
         let leaf_nodes = nodes - non_leaf_nodes;
 
@@ -181,7 +182,7 @@ impl BinaryTree {
 
 #[cfg(test)]
 mod tests {
-    use crate::{data::page::PageDataLayout, fsm::binary_tree::{BinaryTree, left_child, parent, right_child}};
+    use crate::{data::page::PageDataLayout, freespace::binary_tree::{BinaryTree, left_child, parent, right_child}};
 
     #[test]
     fn should_find_middle_leaf() {

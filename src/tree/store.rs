@@ -153,10 +153,7 @@ impl TryFrom<(Vec<u8>, u16)> for NodePage {
             return Err(NodePagerError::InvalidNodePage("Read a page with INVALID id".to_owned()));
         }
 
-        let deleted = match page_bytes[POS_DELETED] {
-            0 => false,
-            _ => true,
-        };
+        let deleted = !matches!(page_bytes[POS_DELETED], 0);
 
         let next_deleted_page = read_i32_with_null(read_node_i32(&page_bytes, POS_NEXT_DELETED_PAGE, "next_deleted_page")?);
 
@@ -368,14 +365,14 @@ impl NodePager {
                     self.meta_data.borrow_mut().set_first_deleted_page(*allocated.next_deleted_page());
                     allocated.reallocate();
                     self.write_page(&allocated)?;
-                    return Ok(allocated);
+                    Ok(allocated)
                 },
                 Err(e) => {
-                    return Err(NodePagerError::CorruptedPage(format!(
+                    Err(NodePagerError::CorruptedPage(format!(
                         "Failed to reallocate page with ID = {first_deleted}, err = {e}"
-                    )));
+                    )))
                 }
-            };
+            }
         } else {
             self.meta_data.borrow_mut().inc_number_of_pages();
             // first id is 0;
@@ -453,6 +450,7 @@ impl BTreeStore {
                     .read(true)
                     .write(true)
                     .create(true)
+                    .truncate(true)
                     .open(file_path)
                     .map_err(NodePagerError::from)
                     .map_err(BTreeStoreError::from)?;

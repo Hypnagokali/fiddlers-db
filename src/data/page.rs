@@ -184,7 +184,7 @@ pub struct RecordIterator {
 impl RecordIterator {
 
     pub fn from_slots(mut page: Page, slot_ids: Vec<usize>) -> Self {
-        let slots = page.slots.drain(..).into_iter()
+        let slots = page.slots.drain(..)
             .enumerate()
             .filter(|(index, _)| slot_ids.contains(index) )
             .map(|(_, s)| s)
@@ -211,7 +211,7 @@ impl RecordIterator {
 fn record_from_slot(page_id: i32, data: Rc<Vec<u8>>, slot_index: usize, slot: &Slot) -> Record {
     let data_to = slot.page_offset + slot.record_length as usize;
     Record {
-        page_id: page_id,
+        page_id,
         record_index: slot_index,
         data: RecordData::new(data, slot.page_offset, data_to),
     }
@@ -271,18 +271,16 @@ pub struct Page<'database> {
 #[derive(Error, Debug)]
 pub enum PageError {
     #[error("Failed to insert row into page. Page is full.")]
-    InsertRowError,
-    #[error("Failed to read page from file.")]
-    ReadPageError,
+    InsertRecord,
     #[error("Failed to update record")]
-    UpdateRecordError,
+    UpdateRecord,
     #[error("Failed to deserialize page: {0}")]
-    DeserializationError(String)
+    Deserialization(String)
 }
 
 impl From<TryFromSliceError> for PageError {
     fn from(value: TryFromSliceError) -> Self {
-        PageError::DeserializationError(value.to_string())
+        PageError::Deserialization(value.to_string())
     }
 }
 
@@ -355,7 +353,7 @@ impl<'database> Page<'database> {
             self.max_fragmented_free_space())
     }
 
-    pub fn can_insert(&self, row_bytes: &Vec<u8>) -> bool {
+    pub fn can_insert(&self, row_bytes: &[u8]) -> bool {
         // currently can_insert is called twice
         // one time by the caller to check if the data fits in the page
         // and a second time by the page itself to verify that it really fits (maybe the caller didn't check)
@@ -375,7 +373,7 @@ impl<'database> Page<'database> {
     }
 
     // just returns the index, so that the caller can decide if it wants to get the slot mutable or not.
-    fn find_free_slot_index(&'database self, row_bytes: &Vec<u8>) -> Option<usize> {
+    fn find_free_slot_index(&'database self, row_bytes: &[u8]) -> Option<usize> {
         let mut fallback = None;
 
         for (index, s) in self.slots.iter().enumerate() {
@@ -405,21 +403,21 @@ impl<'database> Page<'database> {
         if let Some(slot) = slot {
             if slot.record_length != row_bytes.len() as u16 {
                 // Cannot update in place if length differ
-                return Err(PageError::UpdateRecordError);
+                return Err(PageError::UpdateRecord);
             }
 
             let end_of_data = slot.page_offset + row_bytes.len();
             self.data[slot.page_offset..end_of_data].copy_from_slice(&row_bytes);
             Ok(())
         } else {
-            Err(PageError::UpdateRecordError)
+            Err(PageError::UpdateRecord)
         }
     }
 
     /// Inserts the record into the page and returns the slot index of the inserted record
     pub fn insert_record(&mut self, row_bytes: Vec<u8>) -> Result<usize, PageError> {
         if !self.can_insert(&row_bytes) {
-            return Err(PageError::InsertRowError);
+            return Err(PageError::InsertRecord);
         }
 
         let new_record_len = row_bytes.len() as u16; // size already checked
@@ -561,7 +559,7 @@ impl<'database> Page<'database> {
         let free_slots: Vec<Slot> = data[0..free_slots_offset].to_vec()
             .chunks_exact(7)
             .map(|chunk| {
-                let deleted = if chunk[0] == 1 { true } else { false };
+                let deleted = chunk[0] == 1;
                 let offset = u32::from_be_bytes(chunk[1..5].try_into()?) as usize;
                 let length = u16::from_be_bytes(chunk[5..7].try_into()?);
                 let slot = Slot {

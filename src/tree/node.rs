@@ -16,7 +16,7 @@ fn binary_search(key: &i32, keys: &[i32]) -> FindKeyResponse {
     let mut high = last_element;
     let mut low = 0;
 
-    if keys.len() == 0 || key > &keys[last_element] {
+    if keys.is_empty()|| key > &keys[last_element] {
         return FindKeyResponse::GreaterThanTheLast(last_element);
     }
     
@@ -33,8 +33,7 @@ fn binary_search(key: &i32, keys: &[i32]) -> FindKeyResponse {
         }
     }
 
-    for i in low..high + 1 {
-        let k = &keys[i];
+    for (i, k) in keys.iter().enumerate().take(high + 1).skip(low) {
         if key < k {
             return FindKeyResponse::LessThan(i);
         } else if key == k {
@@ -43,7 +42,7 @@ fn binary_search(key: &i32, keys: &[i32]) -> FindKeyResponse {
     }
 
     // Should never reach this point
-    return FindKeyResponse::GreaterThanTheLast(last_element);
+    FindKeyResponse::GreaterThanTheLast(last_element)
 }
 
 #[derive(Debug)]
@@ -140,6 +139,7 @@ impl NodePage {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_from_store(
         id: i32,
         deleted: bool,
@@ -303,7 +303,7 @@ impl NodePage {
         right_node.check_node_invariants(pager);
 
         *self.changed().borrow_mut() = true;
-        pager.write_page(&self)?;
+        pager.write_page(self)?;
 
         Ok((right_node, promoted_key))
     }
@@ -570,14 +570,14 @@ impl NodePage {
                     // remove left key from parent
                     let separator = self.keys.remove(left_index);
                     if left_node.is_leaf() {
-                        left_node.keys.extend(std::mem::take(&mut target_node.keys).into_iter());
-                        left_node.values.extend(std::mem::take(&mut target_node.values).into_iter());
+                        left_node.keys.extend(std::mem::take(&mut target_node.keys));
+                        left_node.values.extend(std::mem::take(&mut target_node.values));
                         // Get next leaf from deleted target node
                         left_node.next_leaf = target_node.next_leaf;
                     } else {
                         left_node.keys.push(separator);
-                        left_node.keys.extend(std::mem::take(&mut target_node.keys).into_iter());
-                        left_node.children.extend(std::mem::take(&mut target_node.children).into_iter());
+                        left_node.keys.extend(std::mem::take(&mut target_node.keys));
+                        left_node.children.extend(std::mem::take(&mut target_node.children));
                     }
                     *left_node.changed.borrow_mut() = true;
                     *self.changed.borrow_mut() = true;
@@ -596,14 +596,14 @@ impl NodePage {
 
                     let separator = self.keys.remove(node_index);
                     if target_node.is_leaf() {
-                        target_node.keys.extend(std::mem::take(&mut right_node.keys).into_iter());
-                        target_node.values.extend(std::mem::take(&mut right_node.values).into_iter());
+                        target_node.keys.extend(std::mem::take(&mut right_node.keys));
+                        target_node.values.extend(std::mem::take(&mut right_node.values));
                         target_node.next_leaf = right_node.next_leaf;
                     } else {
                         // set parents separator in target_node to match the references to the children
                         target_node.keys.push(separator);
-                        target_node.keys.extend(std::mem::take(&mut right_node.keys).into_iter());
-                        target_node.children.extend(std::mem::take(&mut right_node.children).into_iter());
+                        target_node.keys.extend(std::mem::take(&mut right_node.keys));
+                        target_node.children.extend(std::mem::take(&mut right_node.children));
                     }
 
                     *target_node.changed.borrow_mut() = true;
