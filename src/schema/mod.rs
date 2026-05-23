@@ -1,7 +1,6 @@
-use std::fmt::Display;
+use std::{fmt::Display, ops::Deref, rc::Rc};
 
 pub mod table;
-// Table: play_attribute
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum ColumnType { // Byte type
@@ -9,17 +8,57 @@ pub enum ColumnType { // Byte type
     Varchar(u16),   // 0x01 length is stored separately
     Byte,           // 0x02
 }
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
+pub struct ColumnInner {
+    pub(crate) id: i32,
+    pub(crate) name: String,
+    pub(crate) col_type: ColumnType,
+}
+
+#[derive(Debug, Clone)]
 pub struct Column {
-    pub id: i32,
-    pub name: String,
-    pub col_type: ColumnType,
+    inner: Rc<ColumnInner>,
+}
+
+impl Deref for Column {
+    type Target = ColumnInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl PartialEq for Column {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.name == other.name
+            && self.col_type == other.col_type
+    }
+}
+
+#[derive(Debug)]
+pub struct TableSchemaInner {
+    pub(crate) columns: Vec<Column>,
 }
 
 // needs Clone for now, because it is shared across QueryResult and this is the quickest solution
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct TableSchema {
-    pub columns: Vec<Column>,
+    inner: Rc<TableSchemaInner>,
+}
+
+impl Deref for TableSchema {
+    type Target = TableSchemaInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl PartialEq for TableSchema {
+    fn eq(&self, other: &Self) -> bool {
+        self.columns == other.columns
+    }
 }
 
 impl TableSchema {
@@ -27,9 +66,7 @@ impl TableSchema {
         if columns.is_empty() {
             panic!("Cannot crate empty schema");
         }
-        Self {
-            columns,
-        }
+        Self { inner: Rc::new(TableSchemaInner { columns }) }
     }
 
     pub fn find_index_by_id(&self, column_id: &i32) -> Option<usize> {
@@ -72,9 +109,11 @@ impl ColumnType {
 impl Column {
     pub fn new(id: i32, name: &str, col_type: ColumnType) -> Self {
         Self {
-            id,
-            name: name.to_string(),
-            col_type,
+            inner: Rc::new(ColumnInner {
+                id,
+                name: name.to_string(),
+                col_type,
+            }),
         }
     }
 }
