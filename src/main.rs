@@ -1,17 +1,21 @@
 use std::time::{Duration, Instant};
 
+use crate::{
+    database::Database,
+    schema::{ColumnType, table::Cell, table::Row},
+    store::file_store::FileStore,
+};
 use rand::Rng;
-use crate::{database::Database, store::file_store::FileStore, schema::{ColumnType, table::Cell, table::Row}};
 
 // ignore dead_code while developing
 #[allow(dead_code)]
-mod schema;
-#[allow(dead_code)]
 mod data;
 #[allow(dead_code)]
-mod store;
-#[allow(dead_code)]
 mod database;
+#[allow(dead_code)]
+mod schema;
+#[allow(dead_code)]
+mod store;
 #[allow(unused)]
 mod tree;
 
@@ -20,12 +24,17 @@ mod freespace;
 
 #[allow(unused)]
 fn create_table_persons(db: &Database<FileStore>) {
-    let persons_table = db.create_table("persons", vec![
-        ("id", ColumnType::Int, true, true),
-        ("name", ColumnType::Varchar(100), false, false),
-        ("number", ColumnType::Int, false, false),
-        ("flag", ColumnType::Byte, false, false),
-    ]).unwrap();
+    let persons_table = db
+        .create_table(
+            "persons",
+            vec![
+                ("id", ColumnType::Int, true, true),
+                ("name", ColumnType::Varchar(100), false, false),
+                ("number", ColumnType::Int, false, false),
+                ("flag", ColumnType::Byte, false, false),
+            ],
+        )
+        .unwrap();
 
     let person_acc = db.table_access(persons_table.clone()).unwrap();
     let mut seq_acc = db.seq_access_for_table(persons_table).unwrap();
@@ -35,10 +44,15 @@ fn create_table_persons(db: &Database<FileStore>) {
             println!("Added {} entries", i);
         }
         let next_id = seq_acc.next_val("id").unwrap();
-        
-        person_acc.insert(&Row::new(
-            vec![Cell::Int(next_id), Cell::Varchar("Some".to_owned()), Cell::Int(120 + i), Cell::Byte(1)]
-        )).unwrap();
+
+        person_acc
+            .insert(&Row::new(vec![
+                Cell::Int(next_id),
+                Cell::Varchar("Some".to_owned()),
+                Cell::Int(120 + i),
+                Cell::Byte(1),
+            ]))
+            .unwrap();
     }
 }
 
@@ -129,13 +143,23 @@ fn main() {
 
         // Indexed queries
         let idx_result = benchmark_queries(&query_ids, |id| {
-            tbl_acc.find("id", Cell::Int(id)).unwrap().rows().unwrap().len()
+            tbl_acc
+                .find("id", Cell::Int(id))
+                .unwrap()
+                .rows()
+                .unwrap()
+                .len()
         });
         print_benchmark("query result (unique index used)", repetitions, &idx_result);
 
         // Sequential scan queries
         let seq_result = benchmark_queries(&query_ids, |id| {
-            tbl_acc.find("number", Cell::Int(120 + id)).unwrap().rows().unwrap().len()
+            tbl_acc
+                .find("number", Cell::Int(120 + id))
+                .unwrap()
+                .rows()
+                .unwrap()
+                .len()
         });
 
         println!("Run {}:", run);

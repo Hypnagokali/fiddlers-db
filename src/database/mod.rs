@@ -1,18 +1,30 @@
-pub mod table_access;
 pub mod seq_access;
+pub mod table_access;
 
 use std::{cell::RefCell, fs::create_dir, num::ParseIntError, path::Path};
 
 use thiserror::Error;
 
-use crate::{data::page::{PageDataLayout, PageDataLayoutError}, database::{seq_access::{SeqAccess, SeqAccessError}, table_access::{TableAccess, TableAccessError}}, freespace::fsm::Fsm, store::{Store, StoreError, file_store::FileStore}, schema::{Column, ColumnType, TableSchema, table::{Cell, Row, Table}}, tree::store::BTreeStore};
+use crate::{
+    data::page::{PageDataLayout, PageDataLayoutError},
+    database::{
+        seq_access::{SeqAccess, SeqAccessError},
+        table_access::{TableAccess, TableAccessError},
+    },
+    freespace::fsm::Fsm,
+    schema::{
+        Column, ColumnType, TableSchema,
+        table::{Cell, Row, Table},
+    },
+    store::{Store, StoreError, file_store::FileStore},
+    tree::store::BTreeStore,
+};
 
 // TODO: define constants for system catalog
 // Not a good solution for NULL, but very simple for now (see comment in btree module)
 pub const NULL_INT: i32 = i32::MIN;
 // Page size should not be smaller than 512 bytes, where the FSM implementation needs at least 256
 pub const PAGE_SIZE: u16 = 4096;
-
 
 pub struct Database<S: Store> {
     pub name: String,
@@ -78,8 +90,6 @@ impl From<(&str, ColumnType, bool, bool)> for CreateColumnCommand {
     }
 }
 
-
-
 #[derive(Debug, Error)]
 pub enum CreateTableError {
     #[error("Invalid schema definition: {0}")]
@@ -116,7 +126,9 @@ impl From<StoreError> for CreateTableError {
 
 fn is_safe_dir_name(name: &str) -> bool {
     !name.is_empty()
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 impl Database<FileStore> {
@@ -193,22 +205,10 @@ impl<S: Store> Database<S> {
         let fsm_access = Fsm::access(&table_table);
         self.store.create(&self.layout, &fsm_access)?;
 
-        let table_row_tables = Row::new(vec![
-            Cell::Int(1),
-            Cell::Varchar("tables".to_owned()),
-        ]);
-        let table_row_cols = Row::new(vec![
-            Cell::Int(2),
-            Cell::Varchar("columns".to_owned()),
-        ]);
-        let table_row_seq = Row::new(vec![
-            Cell::Int(3),
-            Cell::Varchar("sequences".to_owned()),
-        ]);
-        let table_row_indexes = Row::new(vec![
-            Cell::Int(4),
-            Cell::Varchar("indexes".to_owned()),
-        ]);
+        let table_row_tables = Row::new(vec![Cell::Int(1), Cell::Varchar("tables".to_owned())]);
+        let table_row_cols = Row::new(vec![Cell::Int(2), Cell::Varchar("columns".to_owned())]);
+        let table_row_seq = Row::new(vec![Cell::Int(3), Cell::Varchar("sequences".to_owned())]);
+        let table_row_indexes = Row::new(vec![Cell::Int(4), Cell::Varchar("indexes".to_owned())]);
 
         access.insert(&table_row_tables)?;
         access.insert(&table_row_cols)?;
@@ -292,7 +292,7 @@ impl<S: Store> Database<S> {
             Cell::Int(0),
         ]);
 
-        // Even if there is only one sequence per column and it would make more sense to 
+        // Even if there is only one sequence per column and it would make more sense to
         // link the sequence to the column with an seq_id field in columns,
         // this design avoids null handling and, therefore, the need to implement a null mechanism.
         let col_row_seq_col_id = Row::new(vec![
@@ -377,28 +377,12 @@ impl<S: Store> Database<S> {
         let fsm_access = Fsm::access(&seq_table);
         self.store.create(&self.layout, &fsm_access)?;
 
-        let seq_row_table_id = Row::new(vec![
-            Cell::Int(1),
-            Cell::Int(10),
-            Cell::Int(4),
-        ]);
-        let seq_row_column_id = Row::new(vec![
-            Cell::Int(2),
-            Cell::Int(30),
-            Cell::Int(120),
-        ]);
+        let seq_row_table_id = Row::new(vec![Cell::Int(1), Cell::Int(10), Cell::Int(4)]);
+        let seq_row_column_id = Row::new(vec![Cell::Int(2), Cell::Int(30), Cell::Int(120)]);
 
-        let seq_row_seq_id = Row::new(vec![
-            Cell::Int(4),
-            Cell::Int(80),
-            Cell::Int(4),
-        ]);
+        let seq_row_seq_id = Row::new(vec![Cell::Int(4), Cell::Int(80), Cell::Int(4)]);
 
-        let seq_row_idx_id = Row::new(vec![
-            Cell::Int(3),
-            Cell::Int(100),
-            Cell::Int(0),
-        ]);
+        let seq_row_idx_id = Row::new(vec![Cell::Int(3), Cell::Int(100), Cell::Int(0)]);
 
         tbl_seq.insert(&seq_row_table_id)?;
         tbl_seq.insert(&seq_row_column_id)?;
@@ -406,7 +390,6 @@ impl<S: Store> Database<S> {
         tbl_seq.insert(&seq_row_idx_id)?;
 
         Ok(())
-
     }
 
     fn init_indexes_table(&self) -> Result<(), DatabaseError> {
@@ -435,9 +418,15 @@ impl<S: Store> Database<S> {
         Ok(())
     }
 
-    pub fn seq_access_for_table<'db>(&'db self, table: Table) -> Result<SeqAccess<'db, S>, DatabaseError> {
+    pub fn seq_access_for_table<'db>(
+        &'db self,
+        table: Table,
+    ) -> Result<SeqAccess<'db, S>, DatabaseError> {
         let seq_table = self.read_table("sequences")?;
-        Ok(SeqAccess::new(TableAccess::new(seq_table, &self.store, &self.layout), table))
+        Ok(SeqAccess::new(
+            TableAccess::new(seq_table, &self.store, &self.layout),
+            table,
+        ))
     }
 
     // Would be much nicer, if Table could be moved into TableAccess wrapped in an Rc or Arc
@@ -446,20 +435,32 @@ impl<S: Store> Database<S> {
     // 2. create TableAccess with reference to the table
     //
     // Same is valid for read_sequence_table and SeqAccess
-    pub fn table_access<'db>(&'db self, table: Table) -> Result<TableAccess<'db, S>, DatabaseError> {
+    pub fn table_access<'db>(
+        &'db self,
+        table: Table,
+    ) -> Result<TableAccess<'db, S>, DatabaseError> {
         // ignore the index table itself
         // means: the index table cannot have indexes at the moment (they are simply never read).
         // the problem here is the infinite recursion, it's fixable by using a cache of the catalog table indexes
-        // as soon as the index of 'indexes' is cached, it's not necessary to read it again. 
+        // as soon as the index of 'indexes' is cached, it's not necessary to read it again.
         if table.id() != 4 {
             let indexes = self.read_table("indexes")?;
             let idx_acc = self.table_access(indexes)?;
             let indexes = idx_acc.find("t_id", Cell::Int(table.id()))?;
-            let id_idx = indexes.schema().find_index_by_name("id")
-                .ok_or_else(|| DatabaseError::CorruptedDatabase("Table 'indexes' does not have an 'id' column".to_owned()))?;
+            let id_idx = indexes.schema().find_index_by_name("id").ok_or_else(|| {
+                DatabaseError::CorruptedDatabase(
+                    "Table 'indexes' does not have an 'id' column".to_owned(),
+                )
+            })?;
 
-            let col_ids_idx = indexes.schema().find_index_by_name("col_ids")
-                .ok_or_else(|| DatabaseError::CorruptedDatabase("Table 'indexes' does not have an 'col_ids' column".to_owned()))?;
+            let col_ids_idx = indexes
+                .schema()
+                .find_index_by_name("col_ids")
+                .ok_or_else(|| {
+                    DatabaseError::CorruptedDatabase(
+                        "Table 'indexes' does not have an 'col_ids' column".to_owned(),
+                    )
+                })?;
 
             // indexed_columns:
             // Vec of items column_id and BTree stores (Vec<i32, BTreeStore>)
@@ -476,7 +477,7 @@ impl<S: Store> Database<S> {
                         let col_ids = val.split(' ')
                             .map(|s| s.parse::<i32>())
                             .collect::<Result<Vec<i32>, ParseIntError>>()
-                            .map_err(|_| 
+                            .map_err(|_|
                                 DatabaseError::CorruptedDatabase(
                                     "Column 'col_ids' of table 'indexes' has an invalid format. Valid would be '1', '5 1', etc...".to_owned()
                                 )
@@ -497,8 +498,7 @@ impl<S: Store> Database<S> {
                 Ok((cold_id, btree))
             }).collect::<Result<Vec<(i32, RefCell<BTreeStore>)>, DatabaseError>>()?;
 
-            Ok(TableAccess::new(table, &self.store, &self.layout)
-                .with_indexes(indexed_columns))
+            Ok(TableAccess::new(table, &self.store, &self.layout).with_indexes(indexed_columns))
         } else {
             Ok(TableAccess::new(table, &self.store, &self.layout))
         }
@@ -508,20 +508,33 @@ impl<S: Store> Database<S> {
         let table_table = self.table_instance();
         let access = TableAccess::new(table_table, &self.store, &self.layout);
         let table_query = access.find("name", Cell::Varchar(table_name.to_owned()))?;
-        let table_id_index = table_query.schema().find_index_by_name("id")
-            .ok_or_else(|| DatabaseError::CorruptedDatabase("Column 'id' not found in 'tables' table".to_owned()))?;
+        let table_id_index = table_query
+            .schema()
+            .find_index_by_name("id")
+            .ok_or_else(|| {
+                DatabaseError::CorruptedDatabase(
+                    "Column 'id' not found in 'tables' table".to_owned(),
+                )
+            })?;
         let rows = table_query.rows()?;
 
         if rows.is_empty() {
             return Err(DatabaseError::TableNotFound(table_name.to_owned()));
         }
         if rows.len() > 1 {
-            return Err(DatabaseError::CorruptedDatabase(format!("Multiple occurences of: {}", table_name)));
+            return Err(DatabaseError::CorruptedDatabase(format!(
+                "Multiple occurences of: {}",
+                table_name
+            )));
         }
 
         let table_id = match rows[0].1.cells()[table_id_index] {
             Cell::Int(val) => val,
-            _ => return Err(DatabaseError::CorruptedDatabase("Column 'id' has wrong type in 'tables' table".to_owned())),
+            _ => {
+                return Err(DatabaseError::CorruptedDatabase(
+                    "Column 'id' has wrong type in 'tables' table".to_owned(),
+                ));
+            }
         };
 
         // load schema
@@ -530,46 +543,80 @@ impl<S: Store> Database<S> {
         let col_query = col_access.find("t_id", Cell::Int(table_id))?;
         let col_schema = col_query.schema();
 
-        let id_index = col_schema.find_index_by_name("id")
-            .ok_or_else(|| DatabaseError::CorruptedDatabase("Column 'id' not found in 'columns' table".to_owned()))?;
-        let name_index = col_schema.find_index_by_name("name")
-            .ok_or_else(|| DatabaseError::CorruptedDatabase("Column 'name' not found in 'columns' table".to_owned()))?;
-        let type_index = col_schema.find_index_by_name("type")
-            .ok_or_else(|| DatabaseError::CorruptedDatabase("Column 'type' not found in 'columns' table".to_owned()))?;
-        let length_index = col_schema.find_index_by_name("length")
-            .ok_or_else(|| DatabaseError::CorruptedDatabase("Column 'length' not found in 'columns' table".to_owned()))?;
+        let id_index = col_schema.find_index_by_name("id").ok_or_else(|| {
+            DatabaseError::CorruptedDatabase("Column 'id' not found in 'columns' table".to_owned())
+        })?;
+        let name_index = col_schema.find_index_by_name("name").ok_or_else(|| {
+            DatabaseError::CorruptedDatabase(
+                "Column 'name' not found in 'columns' table".to_owned(),
+            )
+        })?;
+        let type_index = col_schema.find_index_by_name("type").ok_or_else(|| {
+            DatabaseError::CorruptedDatabase(
+                "Column 'type' not found in 'columns' table".to_owned(),
+            )
+        })?;
+        let length_index = col_schema.find_index_by_name("length").ok_or_else(|| {
+            DatabaseError::CorruptedDatabase(
+                "Column 'length' not found in 'columns' table".to_owned(),
+            )
+        })?;
 
-        let col_rows = col_query.rows()?.into_iter()
+        let col_rows = col_query
+            .rows()?
+            .into_iter()
             .map(|(_, row)| {
                 let id = match &row.cells()[id_index] {
                     Cell::Int(val) => val,
-                    _ => return Err(DatabaseError::CorruptedDatabase("Column 'id' has wrong type in 'columns' table".to_owned())),
+                    _ => {
+                        return Err(DatabaseError::CorruptedDatabase(
+                            "Column 'id' has wrong type in 'columns' table".to_owned(),
+                        ));
+                    }
                 };
 
                 let name = match &row.cells()[name_index] {
                     Cell::Varchar(val) => val,
-                    _ => return Err(DatabaseError::CorruptedDatabase("Column 'name' has wrong type in 'columns' table".to_owned())),
+                    _ => {
+                        return Err(DatabaseError::CorruptedDatabase(
+                            "Column 'name' has wrong type in 'columns' table".to_owned(),
+                        ));
+                    }
                 };
                 let length = match row.cells()[length_index] {
                     Cell::Int(val) => val,
-                    _ => return Err(DatabaseError::CorruptedDatabase("Column 'length' has wrong type in 'columns' table".to_owned())),
+                    _ => {
+                        return Err(DatabaseError::CorruptedDatabase(
+                            "Column 'length' has wrong type in 'columns' table".to_owned(),
+                        ));
+                    }
                 };
-                
+
                 let col_type = match row.cells()[type_index] {
                     Cell::Byte(val) => {
                         match val {
                             0 => ColumnType::Int,
                             1 => ColumnType::Varchar(length as u16), // length is stored separately
                             2 => ColumnType::Byte,
-                            _ => return Err(DatabaseError::CorruptedDatabase(format!("Invalid column 'type' value: {}", val))),
+                            _ => {
+                                return Err(DatabaseError::CorruptedDatabase(format!(
+                                    "Invalid column 'type' value: {}",
+                                    val
+                                )));
+                            }
                         }
-                    },
-                    _ => return Err(DatabaseError::CorruptedDatabase("Column 'type' has wrong type in 'columns' table".to_owned())),
+                    }
+                    _ => {
+                        return Err(DatabaseError::CorruptedDatabase(
+                            "Column 'type' has wrong type in 'columns' table".to_owned(),
+                        ));
+                    }
                 };
 
                 Ok(Column::new(*id, name, col_type))
-            }).collect::<Result<Vec<Column>, DatabaseError>>()?;
-            
+            })
+            .collect::<Result<Vec<Column>, DatabaseError>>()?;
+
         let schema = TableSchema::new(col_rows);
 
         Ok(Table::new(table_id, table_name.to_owned(), schema))
@@ -578,7 +625,7 @@ impl<S: Store> Database<S> {
     pub fn drop_table(&self, name: &str) -> Result<(), DatabaseError> {
         // fetch table reference to call delete on store
         let table_to_drop = self.read_table(name)?;
-        
+
         // delete table entry in tables
         let table_table = self.read_table("tables")?;
         let tbl_access = self.table_access(table_table)?;
@@ -591,7 +638,7 @@ impl<S: Store> Database<S> {
 
         let col_query = col_access.find("t_id", Cell::Int(table_to_drop.id()))?;
         col_access.delete(col_query)?;
-        
+
         // delete sequence if exists
         // delete index if exists
 
@@ -600,21 +647,22 @@ impl<S: Store> Database<S> {
         Ok(())
     }
 
-    pub fn create_table<C: Into<CreateColumnCommand>>(&self, name: &str, schema_command: Vec<C>)
-     -> Result<Table, CreateTableError> {
+    pub fn create_table<C: Into<CreateColumnCommand>>(
+        &self,
+        name: &str,
+        schema_command: Vec<C>,
+    ) -> Result<Table, CreateTableError> {
         // check if unique index is only created on int
         // create columns
-        let column_commands: Vec<CreateColumnCommand> = schema_command.into_iter().map(|c| c.into()).collect();
+        let column_commands: Vec<CreateColumnCommand> =
+            schema_command.into_iter().map(|c| c.into()).collect();
         // create table entry in tables
         let table_table = self.read_table("tables")?;
         let mut tbl_seq_acc = self.seq_access_for_table(table_table.clone())?;
         let access = self.table_access(table_table)?;
 
         // check if table with the same name already exists
-        let existing_table_query = access.find(
-            "name",
-            Cell::Varchar(name.to_owned())
-        )?;
+        let existing_table_query = access.find("name", Cell::Varchar(name.to_owned()))?;
         if !existing_table_query.rows()?.is_empty() {
             return Err(CreateTableError::TableAlreadyExists);
         }
@@ -625,7 +673,6 @@ impl<S: Store> Database<S> {
             Cell::Varchar(name.to_owned()),
         ]))?;
 
-
         // create column entries
         let col_table = self.read_table("columns")?;
         let mut col_seq_acc = self.seq_access_for_table(col_table.clone())?;
@@ -634,10 +681,16 @@ impl<S: Store> Database<S> {
         let mut columns = Vec::new();
         for cc in column_commands {
             if cc.is_unique && !matches!(cc.col_type, ColumnType::Int) {
-                return Err(CreateTableError::InvalidSchemaDefinition(format!("Unique index can only be created on int columns. Column '{}' has type '{}'", cc.name, cc.col_type)));
+                return Err(CreateTableError::InvalidSchemaDefinition(format!(
+                    "Unique index can only be created on int columns. Column '{}' has type '{}'",
+                    cc.name, cc.col_type
+                )));
             }
             if cc.has_sequence && !matches!(cc.col_type, ColumnType::Int) {
-                return Err(CreateTableError::InvalidSchemaDefinition(format!("Sequence can only be created on int columns. Column '{}' has type '{}'", cc.name, cc.col_type)));
+                return Err(CreateTableError::InvalidSchemaDefinition(format!(
+                    "Sequence can only be created on int columns. Column '{}' has type '{}'",
+                    cc.name, cc.col_type
+                )));
             }
             let col_id = col_seq_acc.next_val("id")?;
             let column = Column::new(col_id, &cc.name, cc.col_type);
@@ -656,20 +709,18 @@ impl<S: Store> Database<S> {
                     ColumnType::Byte => 0,
                 }),
             ]))?;
-            
+
             if cc.has_sequence {
                 // Create sequence for column
                 let seq_table = self.read_table("sequences")?;
                 let mut seq_sequences = self.seq_access_for_table(seq_table.clone())?;
                 let seq_acc = self.table_access(seq_table)?;
 
-                seq_acc.insert(&Row::new(
-                    vec![
-                        Cell::Int(seq_sequences.next_val("id")?),
-                        Cell::Int(col_id),
-                        Cell::Int(0),
-                    ]
-                ))?;
+                seq_acc.insert(&Row::new(vec![
+                    Cell::Int(seq_sequences.next_val("id")?),
+                    Cell::Int(col_id),
+                    Cell::Int(0),
+                ]))?;
             }
 
             if cc.is_unique {
@@ -678,20 +729,18 @@ impl<S: Store> Database<S> {
                 let mut idx_sequences = self.seq_access_for_table(idx_table.clone())?;
                 let idx_acc = self.table_access(idx_table)?;
 
-                idx_acc.insert(&Row::new(
-                    vec![
-                        Cell::Int(idx_sequences.next_val("id")?),
-                        Cell::Int(tbl_id),
-                        Cell::Varchar(col_id.to_string()),
-                    ]
-                ))?;
+                idx_acc.insert(&Row::new(vec![
+                    Cell::Int(idx_sequences.next_val("id")?),
+                    Cell::Int(tbl_id),
+                    Cell::Varchar(col_id.to_string()),
+                ]))?;
             }
             columns.push(column);
         }
-        
+
         let schema = TableSchema::new(columns);
         let new_table = Table::new(tbl_id, name.to_owned(), schema);
-        
+
         self.store.create(&self.layout, &new_table)?;
         self.create_fsm(&new_table)?;
 
@@ -708,7 +757,14 @@ impl<S: Store> Database<S> {
 #[cfg(test)]
 mod tests {
 
-    use crate::{database::{CreateTableError, Database, DatabaseError}, store::file_store::FileStore, schema::{ColumnType, table::{Cell, Row}}};
+    use crate::{
+        database::{CreateTableError, Database, DatabaseError},
+        schema::{
+            ColumnType,
+            table::{Cell, Row},
+        },
+        store::file_store::FileStore,
+    };
 
     #[test]
     fn should_contain_base_tables_after_init_db() {
@@ -716,27 +772,47 @@ mod tests {
         let base_path = tempfile::tempdir().unwrap();
         let store = FileStore::new(base_path.path()).unwrap();
         let db = Database::new_with_store("test_db", store).unwrap();
-        
+
         // Act
         db.drop_create().unwrap();
 
         // Assert
         let table_tables = db.read_table("tables").unwrap();
         let access = db.table_access(table_tables).unwrap();
-        let table_entries = access.find_all().unwrap().rows().unwrap()
+        let table_entries = access
+            .find_all()
+            .unwrap()
+            .rows()
+            .unwrap()
             .into_iter()
             .map(|(_, row)| row)
             .collect::<Vec<Row>>();
 
         // Check catalog tables:
-        assert!(table_entries.contains(&Row::new(vec![Cell::Int(1), Cell::Varchar("tables".to_owned())])));
-        assert!(table_entries.contains(&Row::new(vec![Cell::Int(2), Cell::Varchar("columns".to_owned())])));
-        assert!(table_entries.contains(&Row::new(vec![Cell::Int(3), Cell::Varchar("sequences".to_owned())])));
-        assert!(table_entries.contains(&Row::new(vec![Cell::Int(4), Cell::Varchar("indexes".to_owned())])));
+        assert!(table_entries.contains(&Row::new(vec![
+            Cell::Int(1),
+            Cell::Varchar("tables".to_owned())
+        ])));
+        assert!(table_entries.contains(&Row::new(vec![
+            Cell::Int(2),
+            Cell::Varchar("columns".to_owned())
+        ])));
+        assert!(table_entries.contains(&Row::new(vec![
+            Cell::Int(3),
+            Cell::Varchar("sequences".to_owned())
+        ])));
+        assert!(table_entries.contains(&Row::new(vec![
+            Cell::Int(4),
+            Cell::Varchar("indexes".to_owned())
+        ])));
 
         let table_tables = db.read_table("columns").unwrap();
         let access = db.table_access(table_tables).unwrap();
-        let column_entries = access.find_all().unwrap().rows().unwrap()
+        let column_entries = access
+            .find_all()
+            .unwrap()
+            .rows()
+            .unwrap()
             .into_iter()
             .map(|(_, row)| row)
             .collect::<Vec<Row>>();
@@ -744,23 +820,20 @@ mod tests {
         // Just a sample of columns:
         // table columns:
         assert!(column_entries.contains(&Row::new(vec![
-            Cell::Int(10), // id
-            Cell::Int(1), // t_id
+            Cell::Int(10),                  // id
+            Cell::Int(1),                   // t_id
             Cell::Varchar("id".to_owned()), // name
-            Cell::Byte(0), // type
-            Cell::Int(0), // length
-            ])
-        ));
+            Cell::Byte(0),                  // type
+            Cell::Int(0),                   // length
+        ])));
 
         assert!(column_entries.contains(&Row::new(vec![
-            Cell::Int(20), // id
-            Cell::Int(1), // t_id
+            Cell::Int(20),                    // id
+            Cell::Int(1),                     // t_id
             Cell::Varchar("name".to_owned()), // name
-            Cell::Byte(1), // type
-            Cell::Int(512), // length
-            ])
-        ));
-
+            Cell::Byte(1),                    // type
+            Cell::Int(512),                   // length
+        ])));
     }
 
     #[test]
@@ -769,35 +842,51 @@ mod tests {
         let base_path = tempfile::tempdir().unwrap();
         let store = FileStore::new(base_path.path()).unwrap();
         let db = Database::new_with_store("test_db", store).unwrap();
-        
-        // Act        
+
+        // Act
         db.drop_create().unwrap();
-        db.create_table("persons", vec![
-            ("id", ColumnType::Int),
-            ("name", ColumnType::Varchar(255)),
-            ("age", ColumnType::Int),
-        ]).unwrap();
+        db.create_table(
+            "persons",
+            vec![
+                ("id", ColumnType::Int),
+                ("name", ColumnType::Varchar(255)),
+                ("age", ColumnType::Int),
+            ],
+        )
+        .unwrap();
 
         // Assert
         let table = db.read_table("persons").unwrap();
         let access = db.table_access(table).unwrap();
-        access.insert(&Row::new(vec![
-            Cell::Int(1),
-            Cell::Varchar("Alice".to_owned()),
-            Cell::Int(30),
-        ])).unwrap();
+        access
+            .insert(&Row::new(vec![
+                Cell::Int(1),
+                Cell::Varchar("Alice".to_owned()),
+                Cell::Int(30),
+            ]))
+            .unwrap();
 
         let query_result = access.find("id", Cell::Int(1)).unwrap();
         let rows = query_result.rows().unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].1.cells(), &[Cell::Int(1), Cell::Varchar("Alice".to_owned()), Cell::Int(30)]);
+        assert_eq!(
+            rows[0].1.cells(),
+            &[
+                Cell::Int(1),
+                Cell::Varchar("Alice".to_owned()),
+                Cell::Int(30)
+            ]
+        );
 
         // second creation should fail
-        let result = db.create_table("persons", vec![
-            ("id", ColumnType::Int),
-            ("name", ColumnType::Varchar(255)),
-            ("age", ColumnType::Int),
-        ]);
+        let result = db.create_table(
+            "persons",
+            vec![
+                ("id", ColumnType::Int),
+                ("name", ColumnType::Varchar(255)),
+                ("age", ColumnType::Int),
+            ],
+        );
 
         assert!(matches!(result, Err(CreateTableError::TableAlreadyExists)));
     }
@@ -808,24 +897,30 @@ mod tests {
         let base_path = tempfile::tempdir().unwrap();
         let store = FileStore::new(base_path.path()).unwrap();
         let db = Database::new_with_store("test_db", store).unwrap();
-        
-        // Act        
+
+        // Act
         db.drop_create().unwrap();
-        db.create_table("persons", vec![
-            ("id", ColumnType::Int),
-            ("name", ColumnType::Varchar(255)),
-            ("age", ColumnType::Int),
-        ]).unwrap();
+        db.create_table(
+            "persons",
+            vec![
+                ("id", ColumnType::Int),
+                ("name", ColumnType::Varchar(255)),
+                ("age", ColumnType::Int),
+            ],
+        )
+        .unwrap();
 
         // Assert
         let table = db.read_table("persons").unwrap();
         let table_id = table.id();
         let access = db.table_access(table).unwrap();
-        access.insert(&Row::new(vec![
-            Cell::Int(1),
-            Cell::Varchar("Alice".to_owned()),
-            Cell::Int(30),
-        ])).unwrap();
+        access
+            .insert(&Row::new(vec![
+                Cell::Int(1),
+                Cell::Varchar("Alice".to_owned()),
+                Cell::Int(30),
+            ]))
+            .unwrap();
 
         db.drop_table("persons").unwrap();
         let result = db.read_table("persons");
@@ -833,7 +928,9 @@ mod tests {
 
         let tbl_table = db.read_table("tables").unwrap();
         let access = db.table_access(tbl_table).unwrap();
-        let query_result = access.find("name", Cell::Varchar("persons".to_owned())).unwrap();
+        let query_result = access
+            .find("name", Cell::Varchar("persons".to_owned()))
+            .unwrap();
         assert_eq!(query_result.rows().unwrap().len(), 0);
 
         let col_table = db.read_table("columns").unwrap();
@@ -841,5 +938,4 @@ mod tests {
         let query_result = col_access.find("t_id", Cell::Int(table_id)).unwrap();
         assert_eq!(query_result.rows().unwrap().len(), 0);
     }
-
 }

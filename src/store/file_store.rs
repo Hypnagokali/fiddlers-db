@@ -1,6 +1,14 @@
-use std::{fs::{File, remove_file}, io::{BufReader, Read, Seek, SeekFrom, Write}, path::{Path, PathBuf}};
+use std::{
+    fs::{File, remove_file},
+    io::{BufReader, Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
+};
 
-use crate::{data::page::{Page, PageDataLayout, PageFileMetadata}, store::{PageStorage, Store, StoreError}, tree::store::BTreeStore};
+use crate::{
+    data::page::{Page, PageDataLayout, PageFileMetadata},
+    store::{PageStorage, Store, StoreError},
+    tree::store::BTreeStore,
+};
 
 // Defines how many keys fit into one node
 const BTREE_MAX_DEGREE: u16 = 500;
@@ -30,12 +38,21 @@ impl FileStore {
         Ok(())
     }
 
-    fn init(&self, layout: &PageDataLayout, page_storage: &dyn PageStorage) -> Result<(), StoreError> {
+    fn init(
+        &self,
+        layout: &PageDataLayout,
+        page_storage: &dyn PageStorage,
+    ) -> Result<(), StoreError> {
         let metadata = PageFileMetadata::new();
         self.write_metadata(layout, &metadata, page_storage)
     }
 
-    fn write_metadata(&self, layout: &PageDataLayout, metadata: &PageFileMetadata, page_storage: &dyn PageStorage) -> Result<(), StoreError> {
+    fn write_metadata(
+        &self,
+        layout: &PageDataLayout,
+        metadata: &PageFileMetadata,
+        page_storage: &dyn PageStorage,
+    ) -> Result<(), StoreError> {
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .open(self.file_path(page_storage))?;
@@ -47,10 +64,11 @@ impl FileStore {
 }
 
 impl Store for FileStore {
-    type I<'database> = FilePageIterator<'database, Self>
+    type I<'database>
+        = FilePageIterator<'database, Self>
     where
         Self: 'database;
-        
+
     fn delete_all(&self) -> Result<(), StoreError> {
         for entry in std::fs::read_dir(&self.base_path)? {
             let entry = entry?;
@@ -64,7 +82,11 @@ impl Store for FileStore {
         Ok(())
     }
 
-    fn read_metadata(&self, layout: &PageDataLayout, page_storage: &dyn PageStorage) -> Result<PageFileMetadata, StoreError> {
+    fn read_metadata(
+        &self,
+        layout: &PageDataLayout,
+        page_storage: &dyn PageStorage,
+    ) -> Result<PageFileMetadata, StoreError> {
         let path: PathBuf = self.file_path(page_storage);
         if !path.exists() {
             return Err(StoreError::InvalidState(format!(
@@ -73,13 +95,13 @@ impl Store for FileStore {
             )));
         }
 
-        let mut file = std::fs::OpenOptions::new()
-            .read(true)
-            .open(path)?;
+        let mut file = std::fs::OpenOptions::new().read(true).open(path)?;
 
         let fmeta = file.metadata()?;
         if fmeta.len() < layout.metadata_size() as u64 {
-            return Err(StoreError::InvalidBasePath("File size is smaller than expected metadata size".to_string()));
+            return Err(StoreError::InvalidBasePath(
+                "File size is smaller than expected metadata size".to_string(),
+            ));
         }
 
         let mut buf = vec![0u8; layout.metadata_size()];
@@ -88,7 +110,12 @@ impl Store for FileStore {
         Ok(PageFileMetadata::deserialize(&buf)?)
     }
 
-    fn read_page<'database>(&self, layout: &'database PageDataLayout, page_id: i32, page_storage: &dyn PageStorage) -> Result<Page<'database>, StoreError> {
+    fn read_page<'database>(
+        &self,
+        layout: &'database PageDataLayout,
+        page_id: i32,
+        page_storage: &dyn PageStorage,
+    ) -> Result<Page<'database>, StoreError> {
         if page_id < 1 {
             return Err(StoreError::InvalidState(format!(
                 "Invalid page_id ({}). page_id must be positive value and not 0",
@@ -104,54 +131,74 @@ impl Store for FileStore {
 
         let page_pos = page_id - 1;
 
-        file.seek(SeekFrom::Start((layout.metadata_size() + page_pos as usize * layout.page_size()) as u64))?;
-    
+        file.seek(SeekFrom::Start(
+            (layout.metadata_size() + page_pos as usize * layout.page_size()) as u64,
+        ))?;
+
         file.read_exact(&mut page_data)?;
 
         let p = Page::deserialize(&page_data, layout)?;
         Ok(p)
     }
 
-    fn write_page(&self, layout: &PageDataLayout, page: &Page, page_storage: &dyn PageStorage) -> Result<(), StoreError> {
+    fn write_page(
+        &self,
+        layout: &PageDataLayout,
+        page: &Page,
+        page_storage: &dyn PageStorage,
+    ) -> Result<(), StoreError> {
         let data = page.serialize();
 
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .open(self.base_path.join(page_storage.file_path()))?;
         let page_pos = page.page_id() - 1;
-        file.seek(SeekFrom::Start((layout.metadata_size() + page_pos as usize * layout.page_size()) as u64))?;
+        file.seek(SeekFrom::Start(
+            (layout.metadata_size() + page_pos as usize * layout.page_size()) as u64,
+        ))?;
         file.write_all(&data)?;
         Ok(())
     }
-    
-    fn allocate_page<'database>(&self, layout: &'database PageDataLayout, page_storage: &dyn PageStorage) -> Result<Page<'database>, StoreError> {
+
+    fn allocate_page<'database>(
+        &self,
+        layout: &'database PageDataLayout,
+        page_storage: &dyn PageStorage,
+    ) -> Result<Page<'database>, StoreError> {
         let mut metadata = self.read_metadata(layout, page_storage)?;
         let mut new_page = Page::new(layout);
         new_page.set_page_id(metadata.allocate_next_page_id());
-        
+
         // ToDo: here we can get into an inconsistent state if write_page fails after write_metadata succeeded
         self.write_metadata(layout, &metadata, page_storage)?;
         self.write_page(layout, &new_page, page_storage)?;
         Ok(new_page)
     }
 
-    fn seq_page_iterator<'database>(&'database self, layout: &'database PageDataLayout, page_storage: &'database dyn PageStorage) 
-        -> Result<FilePageIterator<'database, Self>, StoreError> 
+    fn seq_page_iterator<'database>(
+        &'database self,
+        layout: &'database PageDataLayout,
+        page_storage: &'database dyn PageStorage,
+    ) -> Result<FilePageIterator<'database, Self>, StoreError>
     where
-        Self: Sized
+        Self: Sized,
     {
         let mut file = std::fs::OpenOptions::new()
             .read(true)
             .open(self.base_path.join(page_storage.file_path()))?;
 
         file.seek(SeekFrom::Start(layout.metadata_size() as u64))?;
-    
+
         let reader = BufReader::new(file);
 
         Ok(FilePageIterator::new(page_storage, self, layout)?.with_reader(reader))
     }
-    
-    fn create(&self, layout: &PageDataLayout, page_storage: &dyn PageStorage) -> Result<(), StoreError> {
+
+    fn create(
+        &self,
+        layout: &PageDataLayout,
+        page_storage: &dyn PageStorage,
+    ) -> Result<(), StoreError> {
         if std::fs::exists(self.file_path(page_storage))? {
             return Err(StoreError::InvalidState(format!(
                 "Data structure '{}' already exists",
@@ -161,11 +208,11 @@ impl Store for FileStore {
         std::fs::File::create(self.file_path(page_storage))?;
         self.init(layout, page_storage)
     }
-    
+
     fn delete(&self, page_storage: &dyn PageStorage) -> Result<(), StoreError> {
         self.delete_file(page_storage)
     }
-    
+
     fn read_btree(&self, btree_id: i32) -> Result<BTreeStore, StoreError> {
         let index_file = format!("btreeindex_{}.dat", btree_id);
         let full_path = self.base_path.join(index_file);
@@ -183,7 +230,11 @@ pub struct FilePageIterator<'db, S: Store> {
 }
 
 impl<'db, S: Store> FilePageIterator<'db, S> {
-    pub fn new(table: &'db dyn PageStorage, store: &'db S, layout: &'db PageDataLayout) -> Result<Self, StoreError> {
+    pub fn new(
+        table: &'db dyn PageStorage,
+        store: &'db S,
+        layout: &'db PageDataLayout,
+    ) -> Result<Self, StoreError> {
         let metadata = store.read_metadata(layout, table)?;
         let total_pages = metadata.number_of_pages();
         Ok(Self {
@@ -212,11 +263,13 @@ impl<'db, S: Store> Iterator for FilePageIterator<'db, S> {
 
         let mut buf = vec![0u8; self.layout.page_size()];
         let page = if let Some(reader) = self.reader.as_mut() {
-            reader.read_exact(&mut buf)
+            reader
+                .read_exact(&mut buf)
                 .map_err(StoreError::from)
                 .and_then(|_| Page::deserialize(&buf, self.layout).map_err(StoreError::from))
         } else {
-            self.store.read_page(self.layout, self.current_page_id, self.table)
+            self.store
+                .read_page(self.layout, self.current_page_id, self.table)
         };
 
         self.current_page_id += 1;
@@ -229,11 +282,21 @@ impl<'db, S: Store> Iterator for FilePageIterator<'db, S> {
 mod tests {
     use tempfile::tempdir;
 
-    use crate::{data::page::PageDataLayout, store::{Store, file_store::{FilePageIterator, FileStore}}, schema::{Column, ColumnType, TableSchema, table::{Cell, Row, Table}}};
+    use crate::{
+        data::page::PageDataLayout,
+        schema::{
+            Column, ColumnType, TableSchema,
+            table::{Cell, Row, Table},
+        },
+        store::{
+            Store,
+            file_store::{FilePageIterator, FileStore},
+        },
+    };
 
     struct Sequence {
-            col_id: i32,
-            current: i32,
+        col_id: i32,
+        current: i32,
     }
 
     impl Sequence {
@@ -248,10 +311,7 @@ mod tests {
             let col_id = i32::from_be_bytes(data[0..4].try_into().unwrap());
             let current = i32::from_be_bytes(data[4..8].try_into().unwrap());
 
-            Self {
-                col_id,
-                current,
-            }
+            Self { col_id, current }
         }
     }
 
@@ -262,9 +322,7 @@ mod tests {
 
         let layout = PageDataLayout::new(128).unwrap();
 
-        let schema = TableSchema::new(vec![
-            Column::new(1, "id", ColumnType::Int)
-        ]);
+        let schema = TableSchema::new(vec![Column::new(1, "id", ColumnType::Int)]);
 
         let table = Table::new(1, "test".to_owned(), schema);
 
@@ -272,9 +330,7 @@ mod tests {
         let mut new_page = store.allocate_page(&layout, &table).unwrap();
         assert_eq!(new_page.page_id(), 1);
 
-        let row = Row::new(vec![
-            Cell::Int(42)
-        ]);
+        let row = Row::new(vec![Cell::Int(42)]);
 
         new_page.insert_record(row.serialize()).unwrap();
 
@@ -295,9 +351,7 @@ mod tests {
 
         let layout = PageDataLayout::new(128).unwrap();
 
-        let schema = TableSchema::new(vec![
-            Column::new(1, "id", ColumnType::Int)
-        ]);
+        let schema = TableSchema::new(vec![Column::new(1, "id", ColumnType::Int)]);
 
         let table = Table::new(1, "test".to_owned(), schema);
 
@@ -312,9 +366,7 @@ mod tests {
         let mut second_page = store.allocate_page(&layout, &table).unwrap();
         assert_eq!(second_page.page_id(), 2);
 
-        let row = Row::new(vec![
-            Cell::Int(42)
-        ]);
+        let row = Row::new(vec![Cell::Int(42)]);
 
         second_page.insert_record(row.serialize()).unwrap();
         store.write_page(&layout, &second_page, &table).unwrap();
@@ -333,9 +385,7 @@ mod tests {
 
         let layout = PageDataLayout::new(128).unwrap();
 
-        let schema = TableSchema::new(vec![
-            Column::new(1, "id", ColumnType::Int)
-        ]);
+        let schema = TableSchema::new(vec![Column::new(1, "id", ColumnType::Int)]);
         let table = Table::new(1, "test".to_owned(), schema);
 
         store.create(&layout, &table).unwrap();
@@ -365,9 +415,7 @@ mod tests {
 
         let layout = PageDataLayout::new(32).unwrap();
 
-        let schema = TableSchema::new(vec![
-            Column::new(1, "id", ColumnType::Int)
-        ]);
+        let schema = TableSchema::new(vec![Column::new(1, "id", ColumnType::Int)]);
 
         let table = Table::new(1, "test".to_owned(), schema);
 
@@ -375,9 +423,7 @@ mod tests {
         let mut new_page = store.allocate_page(&layout, &table).unwrap();
         assert_eq!(new_page.page_id(), 1);
 
-        let row = Row::new(vec![
-            Cell::Int(42)
-        ]);
+        let row = Row::new(vec![Cell::Int(42)]);
 
         new_page.insert_record(row.serialize()).unwrap();
         store.write_page(&layout, &new_page, &table).unwrap();

@@ -1,6 +1,5 @@
-pub mod store;
 mod node;
-
+pub mod store;
 
 // Refactoring:
 // at least a BTree trait is needed, so that the BTree is independent of the physical storage and implementation.
@@ -16,5 +15,5 @@ pub fn read_i32_with_null(raw_value: i32) -> Option<i32> {
 }
 
 pub fn get_i32_be_bytes_from_option(value: &Option<i32>) -> Vec<u8> {
-    value.unwrap_or(i32::MIN).to_be_bytes().to_vec()    
+    value.unwrap_or(i32::MIN).to_be_bytes().to_vec()
 }

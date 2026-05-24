@@ -3,7 +3,12 @@
 // Focuses on understandability, so it doesn't contain any self-healing mechanisms.
 use thiserror::Error;
 
-use crate::{data::page::{Page, PageDataLayout, PageError}, freespace::binary_tree::BinaryTree, store::{PageStorage, Store, StoreError}, schema::table::Table};
+use crate::{
+    data::page::{Page, PageDataLayout, PageError},
+    freespace::binary_tree::BinaryTree,
+    schema::table::Table,
+    store::{PageStorage, Store, StoreError},
+};
 
 struct FsmAccess<'db> {
     table: &'db Table,
@@ -36,7 +41,9 @@ pub enum FsmError {
     InvalidPageLayout(String),
     #[error("FSM page {page_id} is missing root slot data")]
     MissingRootSlotData { page_id: i32 },
-    #[error("FSM page {page_id} has corrupt root slot data: expected {expected_len} bytes, got {actual_len}")]
+    #[error(
+        "FSM page {page_id} has corrupt root slot data: expected {expected_len} bytes, got {actual_len}"
+    )]
     CorruptRootSlotData {
         page_id: i32,
         expected_len: usize,
@@ -71,7 +78,11 @@ impl Fsm<'_, ()> {
 }
 
 impl<'db, S: Store> Fsm<'db, S> {
-    pub fn new(store: &'db S, page_layout: &'db PageDataLayout, table: &'db Table) -> Result<Self, FsmError> {
+    pub fn new(
+        store: &'db S,
+        page_layout: &'db PageDataLayout,
+        table: &'db Table,
+    ) -> Result<Self, FsmError> {
         if page_layout.page_size() < 256 {
             return Err(FsmError::InvalidPageLayout(
                 "Page size is too small. 256 is the minimum page size".to_owned(),
@@ -81,7 +92,7 @@ impl<'db, S: Store> Fsm<'db, S> {
         let step_size = page_layout.page_size() / 256;
 
         // Since page IDs are i32 without 0, the tree must be able to address 2^31 - 1 pages.
-        // 1291 as the smallest number that satisfies X^3 >= 2^31 - 1. That means 3 levels from 1291 slots on, 
+        // 1291 as the smallest number that satisfies X^3 >= 2^31 - 1. That means 3 levels from 1291 slots on,
         // and that are 2581 nodes + 21 bytes header (and 1 slot allocation) = 2602 (practically 4096, because only page sizes of a power of 2 are allowed)
         // 216 is the smallest number that satisfies X^4 >= 2^31 - 1. That means 4 levels from 216 slots on.
         // The implementation will only support 3 or 4 levels, if the page size is smaller than 512 bytes, not every page can be addressed.
@@ -117,10 +128,7 @@ impl<'db, S: Store> Fsm<'db, S> {
         let free_space_cat = self.page_space_to_category(free_space);
 
         let (mut addr, mut slot) = self.heap_page_id_to_addr(page.page_id())?;
-        let access = FsmAccess {
-            table: self.table,
-        };
-
+        let access = FsmAccess { table: self.table };
 
         let mut fsm_page_id = self.logical_addr_to_fms_page_id(&addr);
         // check if fsm pages exist
@@ -133,12 +141,15 @@ impl<'db, S: Store> Fsm<'db, S> {
 
         let root = self.root();
         for level in 0..self.depth {
-            let mut fsm_page = self.store.read_page(self.page_layout, fsm_page_id, &access)?;
+            let mut fsm_page = self
+                .store
+                .read_page(self.page_layout, fsm_page_id, &access)?;
             let mut fsm_tree = self.read_tree(&fsm_page)?;
 
             fsm_tree.set_available_space(slot, free_space_cat);
             fsm_page.write_record(0, fsm_tree.serialize())?;
-            self.store.write_page(self.page_layout, &fsm_page, &access)?;
+            self.store
+                .write_page(self.page_layout, &fsm_page, &access)?;
 
             if level < root.level {
                 (addr, slot) = self.parent(&addr)?;
@@ -157,9 +168,7 @@ impl<'db, S: Store> Fsm<'db, S> {
         let mut addr = self.root();
         let cat = self.space_needed_to_category(bytes);
 
-        let access = FsmAccess {
-            table: self.table,
-        };
+        let access = FsmAccess { table: self.table };
 
         // Easiest is, to allocate a page if needed (violates the separation of concerns a bit, but it can be refactored later)
 
@@ -176,7 +185,7 @@ impl<'db, S: Store> Fsm<'db, S> {
         let mut should_never_fail = false;
 
         let mut heap_page_id = 0;
-        for _ in 0..self.depth  {
+        for _ in 0..self.depth {
             // loop without self healing
             // translate to physical address (page_id)
             let page_id = self.logical_addr_to_fms_page_id(&addr);
@@ -184,7 +193,7 @@ impl<'db, S: Store> Fsm<'db, S> {
             let fsm_tree = self.read_tree(&fsm_page)?;
 
             let slot = fsm_tree.find_available(cat);
-            
+
             if let Some(slot) = slot {
                 if addr.level == 0 {
                     // bottom level, find heap page
@@ -197,13 +206,16 @@ impl<'db, S: Store> Fsm<'db, S> {
             } else {
                 if should_never_fail {
                     return Err(FsmError::CorruptedState(
-                        "Must always find a valid address after root pointed to enough space".to_owned(),
+                        "Must always find a valid address after root pointed to enough space"
+                            .to_owned(),
                     ));
                 }
                 // need new page
-                return self.store.allocate_page(self.page_layout, self.table).map_err(FsmError::from);
+                return self
+                    .store
+                    .allocate_page(self.page_layout, self.table)
+                    .map_err(FsmError::from);
             }
-
         }
 
         if heap_page_id < 1 {
@@ -211,7 +223,9 @@ impl<'db, S: Store> Fsm<'db, S> {
         }
 
         // TODO: Last check: does the page_id exist
-        self.store.read_page(self.page_layout, heap_page_id, self.table).map_err(FsmError::from)
+        self.store
+            .read_page(self.page_layout, heap_page_id, self.table)
+            .map_err(FsmError::from)
     }
 
     // Returns parent FsmAddress and slot in parent
@@ -224,10 +238,7 @@ impl<'db, S: Store> Fsm<'db, S> {
         let node_number = child_addr.node_number / self.slots;
         let parent_slot = child_addr.node_number % self.slots; // map to 0...slots - 1
 
-        let parent = FsmAddress {
-            node_number,
-            level,
-        };
+        let parent = FsmAddress { node_number, level };
 
         Ok((parent, parent_slot))
     }
@@ -240,10 +251,7 @@ impl<'db, S: Store> Fsm<'db, S> {
         let level = parent_addr.level - 1;
         let node_number = parent_addr.node_number * self.slots + slot;
 
-        Ok(FsmAddress {
-            node_number,
-            level,
-        })
+        Ok(FsmAddress { node_number, level })
     }
 
     fn allocate_new_fsm_and_init(&self, access: &FsmAccess) -> Result<(), FsmError> {
@@ -284,11 +292,7 @@ impl<'db, S: Store> Fsm<'db, S> {
 
         let cat = (needed as f32 / self.fsm_category_step as f32).ceil() as usize;
 
-        if cat > 255 {
-            255
-        } else {
-            cat as u8
-        }
+        if cat > 255 { 255 } else { cat as u8 }
     }
 
     // Returns FsmAddress and slot
@@ -310,7 +314,11 @@ impl<'db, S: Store> Fsm<'db, S> {
         Ok((addr, slot_on_fsm_page))
     }
 
-    fn addr_slot_to_heap_page_id(&self, addr: &FsmAddress, slot_index: usize) -> Result<i32, FsmError> {
+    fn addr_slot_to_heap_page_id(
+        &self,
+        addr: &FsmAddress,
+        slot_index: usize,
+    ) -> Result<i32, FsmError> {
         if addr.level > 0 {
             return Err(FsmError::CorruptedState(format!(
                 "No heap pages linked on level: {}",
@@ -332,7 +340,7 @@ impl<'db, S: Store> Fsm<'db, S> {
         let mut leaf_number = addr.node_number;
         let lvl = addr.level;
 
-        // Calc logical page number of the first (bottom) leaf page of this node  
+        // Calc logical page number of the first (bottom) leaf page of this node
         for l in 0..lvl {
             leaf_number *= self.slots;
         }
@@ -349,14 +357,15 @@ impl<'db, S: Store> Fsm<'db, S> {
 
         // There is at least one other method to count the nodes:
         // go upwards by dividing by the number of slots and rounding up
-        // go downwards by multiplying with number of slots      
+        // go downwards by multiplying with number of slots
 
         pages as i32 // page_ids start at 1
     }
 
     fn read_tree(&self, page: &Page<'_>) -> Result<BinaryTree, FsmError> {
         let page_id = page.page_id();
-        let bytes = page.read_slot(0)
+        let bytes = page
+            .read_slot(0)
             .ok_or(FsmError::MissingRootSlotData { page_id })?;
         let expected_len = BinaryTree::node_structure(self.page_layout).nodes;
         if bytes.len() != expected_len {
@@ -369,23 +378,28 @@ impl<'db, S: Store> Fsm<'db, S> {
 
         Ok(BinaryTree::deserialize(bytes, self.page_layout))
     }
-
 }
 
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
 
-    use crate::{data::page::PageDataLayout, freespace::{binary_tree::BinaryTree, fsm::{Fsm, FsmAccess, FsmAddress}}, store::{Store, file_store::FileStore}, schema::{Column, ColumnType, TableSchema, table::Table}};
+    use crate::{
+        data::page::PageDataLayout,
+        freespace::{
+            binary_tree::BinaryTree,
+            fsm::{Fsm, FsmAccess, FsmAddress},
+        },
+        schema::{Column, ColumnType, TableSchema, table::Table},
+        store::{Store, file_store::FileStore},
+    };
 
     #[test]
     fn should_walk_the_tree_downwards() {
         let path = tempdir().unwrap();
         let store = FileStore::new(path.path()).unwrap();
         let layout = PageDataLayout::new(256).unwrap();
-        let schema = TableSchema::new(vec![
-            Column::new(1, "SomeColumn", ColumnType::Varchar(255)),
-        ]);
+        let schema = TableSchema::new(vec![Column::new(1, "SomeColumn", ColumnType::Varchar(255))]);
         let table = Table::new(1, "test".to_owned(), schema);
         let fsm = Fsm::new(&store, &layout, &table).unwrap();
 
@@ -394,21 +408,21 @@ mod tests {
             level: 3,
         };
 
-        // Get child logical address: 
+        // Get child logical address:
         // is just the slot: 1
         let addr = fsm.child(&parent_addr, 1).unwrap();
 
         assert_eq!(addr.level, 2);
         assert_eq!(addr.node_number, 1);
 
-        // Get child logical address: 
+        // Get child logical address:
         // 108 * 1 + 77 = 185
         let addr = fsm.child(&addr, 77).unwrap();
 
         assert_eq!(addr.level, 1);
         assert_eq!(addr.node_number, 185);
 
-        // Get child logical address: 
+        // Get child logical address:
         // 108 * 185 + 20 = 20,000
         let addr = fsm.child(&addr, 20).unwrap();
 
@@ -421,9 +435,7 @@ mod tests {
         let path = tempdir().unwrap();
         let store = FileStore::new(path.path()).unwrap();
         let layout = PageDataLayout::new(256).unwrap();
-        let schema = TableSchema::new(vec![
-            Column::new(1, "SomeColumn", ColumnType::Varchar(255)),
-        ]);
+        let schema = TableSchema::new(vec![Column::new(1, "SomeColumn", ColumnType::Varchar(255))]);
         let table = Table::new(1, "test".to_owned(), schema);
         let fsm = Fsm::new(&store, &layout, &table).unwrap();
 
@@ -462,15 +474,13 @@ mod tests {
         let path = tempdir().unwrap();
         let store = FileStore::new(path.path()).unwrap();
         let layout = PageDataLayout::new(256).unwrap();
-        let schema = TableSchema::new(vec![
-            Column::new(1, "SomeColumn", ColumnType::Varchar(255)),
-        ]);
+        let schema = TableSchema::new(vec![Column::new(1, "SomeColumn", ColumnType::Varchar(255))]);
         let table = Table::new(1, "test".to_owned(), schema);
         let fsm = Fsm::new(&store, &layout, &table).unwrap();
 
         // check some random addresses
         // Level 2 page 9 (10th node, 0 count):
-        // All nodes before: 
+        // All nodes before:
         // nodes on same level: 10 (nodes: 0-9)
         // leaf nodes before: 9 * 108^2 = 104,985
         // internal nodes lvl 1: 9 * 108 = 972
@@ -485,7 +495,7 @@ mod tests {
 
         // check some random addresses
         // Level 1 page 5000 (5001th node):
-        // All nodes before: 
+        // All nodes before:
         // nodes on same level: 5001
         // nodes on level 2:    ceil(5001 / 108) = 47
         // root on level 3:     1
@@ -504,9 +514,7 @@ mod tests {
         let path = tempdir().unwrap();
         let store = FileStore::new(path.path()).unwrap();
         let layout = PageDataLayout::new(256).unwrap();
-        let schema = TableSchema::new(vec![
-            Column::new(1, "SomeColumn", ColumnType::Varchar(255)),
-        ]);
+        let schema = TableSchema::new(vec![Column::new(1, "SomeColumn", ColumnType::Varchar(255))]);
         let table = Table::new(1, "test".to_owned(), schema);
         let fsm = Fsm::new(&store, &layout, &table).unwrap();
 
@@ -521,7 +529,7 @@ mod tests {
         // ids go starts from 1, so + 1 = 540,057
         let heap_page_id = fsm.addr_slot_to_heap_page_id(&addr, 56).unwrap();
 
-        assert_eq!(heap_page_id, 540_057);        
+        assert_eq!(heap_page_id, 540_057);
     }
 
     #[test]
@@ -529,11 +537,9 @@ mod tests {
         let path = tempdir().unwrap();
         let store = FileStore::new(path.path()).unwrap();
         let layout = PageDataLayout::new(512).unwrap();
-        let schema = TableSchema::new(vec![
-            Column::new(1, "SomeColumn", ColumnType::Varchar(255)),
-        ]);
+        let schema = TableSchema::new(vec![Column::new(1, "SomeColumn", ColumnType::Varchar(255))]);
         let table = Table::new(1, "test".to_owned(), schema);
-        
+
         // init fsm
         let fsm_access = FsmAccess::new(&table);
         store.create(&layout, &fsm_access).unwrap();
@@ -568,9 +574,7 @@ mod tests {
         let path = tempdir().unwrap();
         let store = FileStore::new(path.path()).unwrap();
         let layout = PageDataLayout::new(512).unwrap();
-        let schema = TableSchema::new(vec![
-            Column::new(1, "SomeColumn", ColumnType::Varchar(255)),
-        ]);
+        let schema = TableSchema::new(vec![Column::new(1, "SomeColumn", ColumnType::Varchar(255))]);
         let table = Table::new(1, "test".to_owned(), schema);
         // init table
         store.create(&layout, &table).unwrap();
@@ -582,13 +586,13 @@ mod tests {
 
         // Need a page with the max amount possible:
         let mut full_page = fsm.find_available_page(491).unwrap();
-        let bytes = [1;491].to_vec();
+        let bytes = [1; 491].to_vec();
         full_page.insert_record(bytes).unwrap();
         fsm.update(&full_page).unwrap();
 
         // Find a page with 1 byte
         let mut almost_empty_page = fsm.find_available_page(1).unwrap();
-        let bytes = [1;1].to_vec();
+        let bytes = [1; 1].to_vec();
         almost_empty_page.insert_record(bytes).unwrap();
         fsm.update(&almost_empty_page).unwrap();
 
@@ -600,15 +604,12 @@ mod tests {
         assert_eq!(needed_100_byte_page.page_id(), 2);
     }
 
-
     #[test]
     fn should_init_tree_once_if_first_request() {
         let path = tempdir().unwrap();
         let store = FileStore::new(path.path()).unwrap();
         let layout = PageDataLayout::new(512).unwrap();
-        let schema = TableSchema::new(vec![
-            Column::new(1, "SomeColumn", ColumnType::Varchar(255)),
-        ]);
+        let schema = TableSchema::new(vec![Column::new(1, "SomeColumn", ColumnType::Varchar(255))]);
         let table = Table::new(1, "test".to_owned(), schema);
         // init table
         store.create(&layout, &table).unwrap();
@@ -631,15 +632,13 @@ mod tests {
 
         // update tree
         fsm.update(&page).unwrap();
-        
+
         // a second request should not allocate new pages:
         let page = fsm.find_available_page(200).unwrap();
         let meta_fsm = store.read_metadata(&layout, &fsm_access).unwrap();
         assert_eq!(page.page_id(), 1);
         assert_eq!(meta_fsm.next_id(), 5);
-
     }
-
 
     #[test]
     fn should_read_binary_tree_from_page() {
@@ -647,9 +646,7 @@ mod tests {
         let store = FileStore::new(path.path()).unwrap();
         let layout = PageDataLayout::new(512).unwrap();
 
-        let schema = TableSchema::new(vec![
-            Column::new(1, "SomeColumn", ColumnType::Varchar(255)),
-        ]);
+        let schema = TableSchema::new(vec![Column::new(1, "SomeColumn", ColumnType::Varchar(255))]);
 
         let table = Table::new(1, "test".to_owned(), schema);
         let fsm_access = FsmAccess::new(&table);
