@@ -2,20 +2,20 @@
 
 A small row-based single threaded toy database written in Rust - to learn the main concepts of databases and to share this experience.
 
-## The Name
+## Where does the name come from
 From fiddle around and rs for rust 🙃.
-
-## Introduction
-
-I created this project as a Christmas project to deeply understand (to feel) the core concepts of a row base database.
-
-Originally, I just wanted to implement a small one-table-database that is able use an index. But then it got a bit out of hand and I realized that it would be cool to have at least the basic CRUD operations. Later, it turned out that I really needed an efficient way of finding a page with enough space when I want to insert many rows. And suddenly the small Christmas project took more than 4 months.
 
 ## Disclaimer
 
-This project exists to learn core RDBMS internals by building them directly: pages, heap storage, free space management, system catalogs, and a simple unique index.
+This project exists to learn core database internals by building them directly: pages, indexes, free space management, system catalogs, etc...
 
-It is intentionally incomplete and not ACID-compliant. The focus is educational clarity over production correctness.
+It is intentionally incomplete, not ACID-compliant and implementations are simplified. The focus is on clarity and comprehensibility over production correctness.
+
+## Introduction
+
+I created this project as a Christmas project to deeply understand the core concepts of a row base database.
+
+Originally, I just wanted to implement a small one-table-database that is able use an index. But then it got a bit out of hand and I realized that it would be cool to have at least the basic CRUD operations. Later, it turned out that I really needed an efficient way of finding a page with enough space when I want to insert many rows. And suddenly the small Christmas project took more than 4 months.
 
 ## Goals
 
@@ -29,7 +29,7 @@ It is intentionally incomplete and not ACID-compliant. The focus is educational 
 
 ## Current Capabilities
 
-- Create a database directory and initialize system tables.
+- Create a database and initialize system catalogs.
 - Create user tables with a typed schema (`Int`, `Varchar(n)`, `Byte`).
 - Insert, read, update, and delete rows.
 - Sequential scans and predicate filtering.
@@ -41,11 +41,11 @@ It is intentionally incomplete and not ACID-compliant. The focus is educational 
 
 - Single threaded
 - No transactions (no commit/rollback, no isolation levels).
-- No constraints framework (no PK/FK/check/not-null handling).
+- No constraints (no PK/FK/not-null handling) apart from a unique constraint.
 - No NULL values
 - No WAL/recovery/crash safety.
 - No SQL parser or query planner (operations are API-driven).
-- No compaction 
+- No page compaction mechanism
 - B+ tree only supports unique indexes with a single key today.
 - No duplicated index keys, no composite keys, no non-`Int` indexed key types.
 - No Server to interact with.
@@ -65,6 +65,10 @@ What it does:
 What is missing / rough edges:
 - No SQL layer; API calls are manual.
 - No transactional semantics.
+- No query plan.
+- Only "find all" and "find by" is implemented
+  - AND and OR is missing
+  - No range queries, although the index already supports them.
 
 ### `data`
 Page that holds raw data. Page Serialization and deserialization.
@@ -75,11 +79,13 @@ What it does:
 - Serializes/deserializes row cells and records.
 
 What is missing / rough edges:
-- Tuple/page implementation for heap is separate from B+ tree page format.
-- Raw pointers into the byte array (PageHeader, PageData) would be more efficient instead of serialization and deserialization of the struct.
+- Tuple/page implementation for heap is separated from B+ tree page format.
+- Raw pointers into the byte array (PageHeader, PageData) would be more efficient than serializing and deserializing the data.
+- There is no page cache currently.
 
 What is a slot?
-- In PostgreSQL this is called the line pointer, it points to a record (offset and length) and can be marked as deleted.
+- In PostgreSQL this is called a line pointer and it points to a record (offset and length) and can be marked as deleted.
+- This is useful for identification ("where exactly is this record located on the page"), for example to delete a record.
 
 Inserting into deleted slots
 - Currently, it is possible to insert directly into deleted slots, that leads to additional slot allocation if the data doesn't fit perfectly
@@ -143,10 +149,11 @@ What is missing / rough edges:
 
 ## What could be done next
 
-- duplicate-key/non-unique indexes
-- Index for arbitrary types and maybe composite keys
+- duplicate-key/non-unique indexes.
+- Query operators (filter, projection, join) and the implementation of the Volcano Iterator Model.
+- Index for arbitrary types and maybe composite keys.
 - WAL for crash recovery, atomicity and durability.
-- Transactions and isolation
-- shared storage abstraction for heap + B+ tree pages
-- NULL values by using a bitmap (tuple header is needed for this)
+- Transactions and isolation.
+- shared storage abstraction for heap + B+ tree pages.
+- NULL values by using a bitmap (tuple header is needed for this).
 
