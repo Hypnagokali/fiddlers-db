@@ -50,9 +50,7 @@ pub enum RowDeserializationError {
 
 impl Row {
     pub fn new(cells: Vec<Cell>) -> Self {
-        Self {
-            cells,
-        }
+        Self { cells }
     }
 
     pub fn cells(&self) -> &Vec<Cell> {
@@ -68,14 +66,19 @@ impl Row {
         bytes
     }
 
-    pub fn deserialize(row_data: &[u8], schema: &TableSchema) -> Result<Self, RowDeserializationError> {
+    pub fn deserialize(
+        row_data: &[u8],
+        schema: &TableSchema,
+    ) -> Result<Self, RowDeserializationError> {
         let mut cells = Vec::new();
         let mut offset = 0;
         for col in schema.columns.iter() {
-            let (cell, bytes_read) = Cell::deserialize(&row_data[offset..], col)
-                .map_err(|source| RowDeserializationError::Cell {
-                    column: col.name.clone(),
-                    source,
+            let (cell, bytes_read) =
+                Cell::deserialize(&row_data[offset..], col).map_err(|source| {
+                    RowDeserializationError::Cell {
+                        column: col.name.clone(),
+                        source,
+                    }
                 })?;
             offset += bytes_read;
             cells.push(cell);
@@ -96,20 +99,21 @@ impl Row {
                 }
                 (Cell::Varchar(input), ColumnType::Varchar(max_len)) => {
                     if input.len() > *max_len as usize {
-                        return Err(RowValidationError::VarcharTooLong(*max_len, column.name.clone()));
+                        return Err(RowValidationError::VarcharTooLong(
+                            *max_len,
+                            column.name.clone(),
+                        ));
                     }
                 }
                 (Cell::Byte(_), ColumnType::Byte) => {
                     // always valid
                 }
                 _ => {
-                    return Err(
-                        RowValidationError::TypeMismatch(
-                            column.name.clone(),
-                            column.col_type.to_string(),
-                            cell.column_type().to_string()
-                        )
-                    );
+                    return Err(RowValidationError::TypeMismatch(
+                        column.name.clone(),
+                        column.col_type.to_string(),
+                        cell.column_type().to_string(),
+                    ));
                 }
             }
         }
@@ -121,13 +125,7 @@ impl Row {
 impl Table {
     pub fn new(id: i32, name: String, schema: TableSchema) -> Self {
         Self {
-            inner: Rc::new(
-                TableInner {
-                    id,
-                    name,
-                    schema,
-                }
-            )
+            inner: Rc::new(TableInner { id, name, schema }),
         }
     }
 
@@ -147,7 +145,6 @@ impl Table {
         row.validate(&self.inner.schema)
     }
 }
-
 
 #[derive(Debug, Error)]
 pub enum CellDeserializationError {
@@ -200,7 +197,7 @@ impl Cell {
                 let mut bytes = (s.len() as u16).to_be_bytes().to_vec();
                 bytes.extend_from_slice(s.as_bytes());
                 bytes
-            },
+            }
             Cell::Byte(b) => {
                 vec![*b]
             }
@@ -209,7 +206,10 @@ impl Cell {
 
     // Gets always the next slice of the row_data
     // Returns: (Cell, number of bytes read)
-    pub fn deserialize(row_data: &[u8], column: &schema::Column) -> Result<(Self, usize), CellDeserializationError> {
+    pub fn deserialize(
+        row_data: &[u8],
+        column: &schema::Column,
+    ) -> Result<(Self, usize), CellDeserializationError> {
         match &column.col_type {
             ColumnType::Int => {
                 if row_data.len() < 4 {
@@ -217,8 +217,9 @@ impl Cell {
                 }
                 let int_bytes = &row_data[0..4];
                 let int_value = i32::from_be_bytes(
-                    int_bytes.try_into()
-                        .map_err(|_| CellDeserializationError::InvalidData)?
+                    int_bytes
+                        .try_into()
+                        .map_err(|_| CellDeserializationError::InvalidData)?,
                 );
                 Ok((Cell::Int(int_value), 4))
             }
@@ -229,8 +230,9 @@ impl Cell {
                 }
                 let len_bytes = &row_data[0..2];
                 let str_len = u16::from_be_bytes(
-                    len_bytes.try_into()
-                        .map_err(|_| CellDeserializationError::InvalidData)?
+                    len_bytes
+                        .try_into()
+                        .map_err(|_| CellDeserializationError::InvalidData)?,
                 ) as usize;
                 if row_data.len() < (2 + str_len) {
                     return Err(CellDeserializationError::InvalidData);
@@ -245,7 +247,7 @@ impl Cell {
                     .map_err(|_| CellDeserializationError::InvalidData)?;
 
                 Ok((Cell::Varchar(str_value), 2 + str_len))
-            },
+            }
             ColumnType::Byte => {
                 if row_data.is_empty() {
                     return Err(CellDeserializationError::InvalidData);
@@ -276,9 +278,7 @@ mod tests {
             Cell::Byte(1),
         ];
 
-        let row = Row {
-            cells,
-        };
+        let row = Row { cells };
 
         let serialized = row.serialize();
 
@@ -298,11 +298,7 @@ mod tests {
             Column::new(3, "active", ColumnType::Byte),
         ]);
 
-        let table = Table::new(
-            1,
-            "users".to_string(),
-            schema,
-        );
+        let table = Table::new(1, "users".to_string(), schema);
 
         let valid_row = Row {
             cells: vec![
@@ -322,11 +318,7 @@ mod tests {
             Column::new(2, "name", ColumnType::Varchar(50)),
         ]);
 
-        let table = Table::new(
-            1,
-            "users".to_string(),
-            schema,
-        );
+        let table = Table::new(1, "users".to_string(), schema);
 
         let invalid_row = Row {
             cells: vec![
@@ -338,7 +330,10 @@ mod tests {
 
         let result = table.validate_row(&invalid_row);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), RowValidationError::LengthMismatch));
+        assert!(matches!(
+            result.unwrap_err(),
+            RowValidationError::LengthMismatch
+        ));
     }
 
     #[test]
@@ -348,38 +343,29 @@ mod tests {
             Column::new(2, "name", ColumnType::Varchar(50)),
         ]);
 
-        let table = Table::new(
-            1,
-            "users".to_string(),
-            schema,
-        );
+        let table = Table::new(1, "users".to_string(), schema);
 
         let invalid_row = Row {
-            cells: vec![
-                Cell::Int(100),
-                Cell::Byte(1),
-            ],
+            cells: vec![Cell::Int(100), Cell::Byte(1)],
         };
 
         let result = table.validate_row(&invalid_row);
         assert!(result.is_err());
-        
+
         matches!(result.unwrap_err(), RowValidationError::TypeMismatch(name, _, _) if name == "name");
     }
 
     #[test]
     fn test_table_validate_row_varchar_too_long() {
-        let schema = TableSchema::new(vec![
-            Column::new(1, "name", ColumnType::Varchar(10)),
-        ]);
+        let schema = TableSchema::new(vec![Column::new(1, "name", ColumnType::Varchar(10))]);
 
         let table = Table::new(1, "users".to_string(), schema);
 
         // Row with varchar longer than max length
         let invalid_row = Row {
-            cells: vec![
-                Cell::Varchar("This string is way too long for the column".to_string()),
-            ],
+            cells: vec![Cell::Varchar(
+                "This string is way too long for the column".to_string(),
+            )],
         };
 
         let result = table.validate_row(&invalid_row);

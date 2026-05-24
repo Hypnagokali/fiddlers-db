@@ -3,10 +3,11 @@ use std::{fmt::Display, ops::Deref, rc::Rc};
 pub mod table;
 
 #[derive(Debug, PartialEq, Clone)]
-pub enum ColumnType { // Byte type
-    Int,            // 0x00
-    Varchar(u16),   // 0x01 length is stored separately
-    Byte,           // 0x02
+pub enum ColumnType {
+    // Byte type
+    Int,          // 0x00
+    Varchar(u16), // 0x01 length is stored separately
+    Byte,         // 0x02
 }
 #[derive(Debug)]
 pub struct ColumnInner {
@@ -30,9 +31,7 @@ impl Deref for Column {
 
 impl PartialEq for Column {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-            && self.name == other.name
-            && self.col_type == other.col_type
+        self.id == other.id && self.name == other.name && self.col_type == other.col_type
     }
 }
 
@@ -66,7 +65,9 @@ impl TableSchema {
         if columns.is_empty() {
             panic!("Cannot crate empty schema");
         }
-        Self { inner: Rc::new(TableSchemaInner { columns }) }
+        Self {
+            inner: Rc::new(TableSchemaInner { columns }),
+        }
     }
 
     pub fn find_index_by_id(&self, column_id: &i32) -> Option<usize> {

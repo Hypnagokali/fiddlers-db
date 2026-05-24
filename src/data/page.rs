@@ -26,7 +26,6 @@ impl PageDataLayout {
     const PAGE_HEADER_SIZE: u16 = 14;
     const MIN_PAGE_SIZE: u16 = 32; // just arbitrarily value so it's easy to test with few bytes
 
-
     // free data tuple constants
     pub const SLOT_SIZE: usize = 7; // 4 bytes offset, 2 bytes length, 1 byte deleted flag
     const SLOT_DELETED_INDEX: usize = 0;
@@ -62,13 +61,12 @@ impl PageDataLayout {
     pub fn metadata_size(&self) -> usize {
         Self::META_DATA_SIZE
     }
-
 }
 
 #[derive(Debug, Error)]
 pub enum ReadMetadataError {
     #[error("Cannot deserialize PageFileMetadata: {0}")]
-    DeserializationError(String)
+    DeserializationError(String),
 }
 
 impl From<TryFromSliceError> for ReadMetadataError {
@@ -82,7 +80,7 @@ impl From<TryFromSliceError> for ReadMetadataError {
 // should maybe not live here. Is more an implementation detail of Store and how the store handles page IDs
 #[derive(Debug)]
 pub struct PageFileMetadata {
-    next_id: i32, // There is currently just a signed int for ids
+    next_id: i32,         // There is currently just a signed int for ids
     number_of_pages: i32, // because of next_id being i32
 }
 
@@ -145,7 +143,7 @@ impl RecordData {
     pub fn new(data: Rc<Vec<u8>>, slice_from: usize, slice_to: usize) -> Self {
         Self {
             data,
-            slice: (slice_from, slice_to)
+            slice: (slice_from, slice_to),
         }
     }
     pub fn data(&self) -> &[u8] {
@@ -182,11 +180,12 @@ pub struct RecordIterator {
 }
 
 impl RecordIterator {
-
     pub fn from_slots(mut page: Page, slot_ids: Vec<usize>) -> Self {
-        let slots = page.slots.drain(..)
+        let slots = page
+            .slots
+            .drain(..)
             .enumerate()
-            .filter(|(index, _)| slot_ids.contains(index) )
+            .filter(|(index, _)| slot_ids.contains(index))
             .map(|(_, s)| s)
             .collect();
 
@@ -227,7 +226,8 @@ impl Iterator for RecordIterator {
             let slot = &self.slots[self.next_slot];
 
             if !slot.deleted {
-                let record = record_from_slot(self.page_id, Rc::clone(&self.data), self.next_slot, slot) ;
+                let record =
+                    record_from_slot(self.page_id, Rc::clone(&self.data), self.next_slot, slot);
 
                 found = Some(record);
             }
@@ -259,7 +259,7 @@ pub struct Page<'database> {
     // header
     number_of_records: u16,
     // data_offset is actually the free space pointer
-    // offset uses usize internally for easier handling (but it's actually an i32) 
+    // offset uses usize internally for easier handling (but it's actually an i32)
     // starts from page_data_size and is heading towards 0
     data_offset: usize,
     // Place where the next free slot can be inserted:
@@ -275,7 +275,7 @@ pub enum PageError {
     #[error("Failed to update record")]
     UpdateRecord,
     #[error("Failed to deserialize page: {0}")]
-    Deserialization(String)
+    Deserialization(String),
 }
 
 impl From<TryFromSliceError> for PageError {
@@ -287,7 +287,6 @@ impl From<TryFromSliceError> for PageError {
 #[cfg(target_pointer_width = "64")] // so that I can use always 8 bytes for usize
 impl<'database> Page<'database> {
     pub fn new(layout: &'database PageDataLayout) -> Self {
-
         Self {
             layout,
             data: vec![0; layout.page_data_size()],
@@ -332,13 +331,15 @@ impl<'database> Page<'database> {
     }
 
     pub fn read_slot(&self, slot_id: usize) -> Option<&[u8]> {
-        self.slots.get(slot_id)
+        self.slots
+            .get(slot_id)
             .filter(|slot| !slot.deleted)
             .map(|slot| self.read_data(slot))
     }
 
     fn max_fragmented_free_space(&self) -> usize {
-        self.slots.iter()
+        self.slots
+            .iter()
             .filter(|s| s.deleted)
             .map(|s| s.record_length)
             .max()
@@ -347,10 +348,9 @@ impl<'database> Page<'database> {
 
     pub fn max_available_space(&self) -> usize {
         // page_data_size - row_data_size - slots in use
-        let allocated_space = self.layout.page_data_size() - self.row_data_size() - self.slot_size();
-        std::cmp::max(
-            allocated_space,
-            self.max_fragmented_free_space())
+        let allocated_space =
+            self.layout.page_data_size() - self.row_data_size() - self.slot_size();
+        std::cmp::max(allocated_space, self.max_fragmented_free_space())
     }
 
     pub fn can_insert(&self, row_bytes: &[u8]) -> bool {
@@ -359,7 +359,9 @@ impl<'database> Page<'database> {
         // and a second time by the page itself to verify that it really fits (maybe the caller didn't check)
         // the first call can be replaced by using FSM in the future
         if let Some(slot) = self.find_free_slot_index(row_bytes) {
-            let perfect_fit = self.slots.get(slot)
+            let perfect_fit = self
+                .slots
+                .get(slot)
                 .map(|s| s.record_length as usize == row_bytes.len())
                 .unwrap_or(false);
 
@@ -397,7 +399,11 @@ impl<'database> Page<'database> {
 
     /// Update in place
     /// Only possible if the length hasn't changed
-    pub fn write_record(&mut self, record_index: usize, row_bytes: Vec<u8>) -> Result<(), PageError> {
+    pub fn write_record(
+        &mut self,
+        record_index: usize,
+        row_bytes: Vec<u8>,
+    ) -> Result<(), PageError> {
         let slot = self.slots.get_mut(record_index);
 
         if let Some(slot) = slot {
@@ -428,43 +434,45 @@ impl<'database> Page<'database> {
         // - defragment the page and update the slot pointers that are not deleted
         // - don't delete the deleted slot pointer (because that would break the index)
         // - only reuse slot pointers after the index is not using them anymore (do index cleanup regularly)
-        let deleted_slot = self.find_free_slot_index(&row_bytes)
+        let deleted_slot = self
+            .find_free_slot_index(&row_bytes)
             .and_then(|slot_index| {
-                self.slots.get_mut(slot_index)
+                self.slots
+                    .get_mut(slot_index)
                     .map(|slot| (slot_index, slot))
-        });
+            });
 
+        let (slot_deleted, new_slot_len, slot_data_start_offset) =
+            if let Some((index, slot)) = deleted_slot {
+                slot_index = index;
+                let end_of_data = slot.page_offset + row_bytes.len();
+                self.data[slot.page_offset..end_of_data].copy_from_slice(&row_bytes);
 
-        let (slot_deleted, new_slot_len, slot_data_start_offset) = if let Some((index, slot)) = deleted_slot {
-            slot_index = index;
-            let end_of_data = slot.page_offset + row_bytes.len();
-            self.data[slot.page_offset..end_of_data].copy_from_slice(&row_bytes);
+                // Need a new slot if the length of the inserted record is not as long as the slot
+                let remaining_slot_len = slot.record_length - new_record_len;
 
-            // Need a new slot if the length of the inserted record is not as long as the slot
-            let remaining_slot_len = slot.record_length - new_record_len;
-            
-            if remaining_slot_len > 0 {
-                slot.record_length = new_record_len;
-            }
+                if remaining_slot_len > 0 {
+                    slot.record_length = new_record_len;
+                }
 
-            slot.deleted = false;
+                slot.deleted = false;
 
-            (true, remaining_slot_len, end_of_data)
-        } else {
-            // just returning the length of slots should be correct
-            // because a new slot must be allocated for this data
-            slot_index = self.slots.len();
-            let start_of_data = self.data_offset - row_bytes.len();
-            self.data[start_of_data..self.data_offset].copy_from_slice(&row_bytes);
-            self.data_offset -= row_bytes.len();
+                (true, remaining_slot_len, end_of_data)
+            } else {
+                // just returning the length of slots should be correct
+                // because a new slot must be allocated for this data
+                slot_index = self.slots.len();
+                let start_of_data = self.data_offset - row_bytes.len();
+                self.data[start_of_data..self.data_offset].copy_from_slice(&row_bytes);
+                self.data_offset -= row_bytes.len();
 
-            (false, row_bytes.len() as u16, start_of_data)
-        };
+                (false, row_bytes.len() as u16, start_of_data)
+            };
 
         if new_slot_len > 0 {
             self.allocate_slot(slot_data_start_offset, new_slot_len, slot_deleted);
         }
-    
+
         self.number_of_records += 1;
 
         Ok(slot_index)
@@ -474,11 +482,15 @@ impl<'database> Page<'database> {
         // It's possible to allocate deleted slot
         // for example, if a deleted slot has been overwritten with a smaller record,
         // the remaining free space can be allocated as a new slot
-        self.slots.push(Slot { record_length, page_offset, deleted });
+        self.slots.push(Slot {
+            record_length,
+            page_offset,
+            deleted,
+        });
     }
 
     pub fn delete_record(&mut self, record_index: usize) -> bool {
-        let slot = self.slots.get_mut(record_index);             
+        let slot = self.slots.get_mut(record_index);
 
         if let Some(slot) = slot {
             slot.deleted = true;
@@ -498,7 +510,7 @@ impl<'database> Page<'database> {
         // Number of rows 2 Bytes
         buf[PageDataLayout::INDEX_NUMBER_ROWS..PageDataLayout::INDEX_ROW_OFFSET]
             .copy_from_slice(&self.number_of_records.to_be_bytes());
-        
+
         // Offset 4 Bytes
         let offset_bytes = (self.data_offset as u32).to_be_bytes();
         buf[PageDataLayout::INDEX_ROW_OFFSET..PageDataLayout::INDEX_PAGE_ID]
@@ -510,27 +522,29 @@ impl<'database> Page<'database> {
             .copy_from_slice(&page_id_bytes);
 
         // Free slots offset 4 Bytes
-        let free_slots_offset_bytes = ((self.slots.len() * PageDataLayout::SLOT_SIZE) as i32).to_be_bytes();
+        let free_slots_offset_bytes =
+            ((self.slots.len() * PageDataLayout::SLOT_SIZE) as i32).to_be_bytes();
         buf[PageDataLayout::INDEX_FREE_SLOTS_OFFSET..PageDataLayout::INDEX_FREE_SLOTS_OFFSET + 4]
             .copy_from_slice(&free_slots_offset_bytes);
 
-        buf[PageDataLayout::INDEX_FREE_SLOTS_OFFSET + 4..self.layout.page_size()].copy_from_slice(&self.data);
+        buf[PageDataLayout::INDEX_FREE_SLOTS_OFFSET + 4..self.layout.page_size()]
+            .copy_from_slice(&self.data);
 
         // serialize Slots:
         for (i, slot) in self.slots.iter().enumerate() {
-            let deleted_flag = PageDataLayout::INDEX_FREE_SLOTS_START + (i * PageDataLayout::SLOT_SIZE);
+            let deleted_flag =
+                PageDataLayout::INDEX_FREE_SLOTS_START + (i * PageDataLayout::SLOT_SIZE);
             let offset_of_data_index = deleted_flag + 1;
             let length_index = deleted_flag + PageDataLayout::SLOT_RECORD_LENGTH_INDEX;
             let length_end = length_index + 2;
-            
+
             // deleted flag
             buf[deleted_flag] = if slot.deleted { 1 } else { 0 };
             // offset
             buf[offset_of_data_index..length_index]
                 .copy_from_slice(&(slot.page_offset as u32).to_be_bytes());
             // length
-            buf[length_index..length_end]
-                .copy_from_slice(&(slot.record_length).to_be_bytes());
+            buf[length_index..length_end].copy_from_slice(&(slot.record_length).to_be_bytes());
         }
 
         buf
@@ -538,25 +552,28 @@ impl<'database> Page<'database> {
 
     pub fn deserialize(buf: &[u8], layout: &'database PageDataLayout) -> Result<Self, PageError> {
         let num_rows = u16::from_be_bytes(
-            buf[PageDataLayout::INDEX_NUMBER_ROWS..PageDataLayout::INDEX_ROW_OFFSET].try_into()?
+            buf[PageDataLayout::INDEX_NUMBER_ROWS..PageDataLayout::INDEX_ROW_OFFSET].try_into()?,
         );
 
         let offset = i32::from_be_bytes(
-            buf[PageDataLayout::INDEX_ROW_OFFSET..PageDataLayout::INDEX_PAGE_ID].try_into()?
-        
+            buf[PageDataLayout::INDEX_ROW_OFFSET..PageDataLayout::INDEX_PAGE_ID].try_into()?,
         );
 
         let page_id = i32::from_be_bytes(
-            buf[PageDataLayout::INDEX_PAGE_ID..PageDataLayout::INDEX_FREE_SLOTS_OFFSET].try_into()?
+            buf[PageDataLayout::INDEX_PAGE_ID..PageDataLayout::INDEX_FREE_SLOTS_OFFSET]
+                .try_into()?,
         );
 
         let free_slots_offset = i32::from_be_bytes(
-            buf[PageDataLayout::INDEX_FREE_SLOTS_OFFSET..PageDataLayout::INDEX_FREE_SLOTS_OFFSET + 4].try_into()?
+            buf[PageDataLayout::INDEX_FREE_SLOTS_OFFSET
+                ..PageDataLayout::INDEX_FREE_SLOTS_OFFSET + 4]
+                .try_into()?,
         ) as usize;
 
         let data = buf[PageDataLayout::INDEX_FREE_SLOTS_OFFSET + 4..layout.page_size()].to_vec();
 
-        let free_slots: Vec<Slot> = data[0..free_slots_offset].to_vec()
+        let free_slots: Vec<Slot> = data[0..free_slots_offset]
+            .to_vec()
             .chunks_exact(7)
             .map(|chunk| {
                 let deleted = chunk[0] == 1;
@@ -568,7 +585,8 @@ impl<'database> Page<'database> {
                     deleted,
                 };
                 Ok(slot)
-            }).collect::<Result<Vec<Slot>, TryFromSliceError>>()?;
+            })
+            .collect::<Result<Vec<Slot>, TryFromSliceError>>()?;
 
         Ok(Self {
             layout,
@@ -582,7 +600,6 @@ impl<'database> Page<'database> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use crate::data::page::{Page, PageDataLayout, PageDataLayoutError};
@@ -595,7 +612,7 @@ mod tests {
         page.insert_record(vec![1, 2, 1, 2]).unwrap();
         page.insert_record(vec![2, 4, 2, 4]).unwrap();
         page.insert_record(vec![3, 5, 3, 5]).unwrap();
-        
+
         page.delete_record(1);
         page.insert_record(vec![9, 9, 9]).unwrap();
 
@@ -606,12 +623,14 @@ mod tests {
         page.insert_record(vec![10]).unwrap();
         assert_eq!(page.slots[3].deleted, false);
         assert_eq!(page.read_data(&page.slots[3]), [10]);
-        
-        let record = page.record_iterator().find(|v| v.data.data()[0] == 9).unwrap();
-        assert_eq!(record.data.data(), &[9, 9, 9]);
-        assert_eq!(record.record_index, 1);        
-    }
 
+        let record = page
+            .record_iterator()
+            .find(|v| v.data.data()[0] == 9)
+            .unwrap();
+        assert_eq!(record.data.data(), &[9, 9, 9]);
+        assert_eq!(record.record_index, 1);
+    }
 
     #[test]
     fn should_update_record_in_place() {
@@ -623,15 +642,21 @@ mod tests {
         page.insert_record(vec![3, 5, 3, 5]).unwrap();
 
         let ser_page = page.serialize();
-        let record = page.record_iterator().find(|v| v.data.data()[0] == 2).unwrap();
+        let record = page
+            .record_iterator()
+            .find(|v| v.data.data()[0] == 2)
+            .unwrap();
 
         let mut page = Page::deserialize(&ser_page, &layout).unwrap();
-        page.write_record(record.record_index, vec![2, 2, 2, 2]).unwrap();
-        let record = page.record_iterator().find(|v| v.data.data()[0] == 2).unwrap();
+        page.write_record(record.record_index, vec![2, 2, 2, 2])
+            .unwrap();
+        let record = page
+            .record_iterator()
+            .find(|v| v.data.data()[0] == 2)
+            .unwrap();
         assert_eq!(record.data.data(), &[2, 2, 2, 2]);
         assert_eq!(record.record_index, 1);
     }
-
 
     #[test]
     fn should_not_allow_page_layout_size_less_than_32() {
@@ -659,7 +684,7 @@ mod tests {
         assert_eq!(page.data.len(), 18);
         assert_eq!(page.slots.len(), 1);
         //points to offset 11, but no free space
-        
+
         let slot_option = page.slots.get(0);
         assert!(slot_option.is_some());
         let slot = slot_option.unwrap();
@@ -739,7 +764,7 @@ mod tests {
         let layout = PageDataLayout::new(32).unwrap();
         let page = Page::new(&layout);
         let record_data = page.record_iterator().next();
-              
+
         assert!(record_data.is_none());
     }
 
@@ -751,12 +776,12 @@ mod tests {
         page.insert_record(vec![4, 5, 6]).unwrap();
 
         let mut rec_iterator = page.record_iterator();
-        let mut record_data = rec_iterator.next();        
+        let mut record_data = rec_iterator.next();
         assert!(matches!(record_data, Some(record) if record.data() == &[1, 2, 3]));
 
         record_data = rec_iterator.next();
         assert!(matches!(record_data, Some(record) if record.data() == &[4, 5, 6]));
-        
+
         record_data = rec_iterator.next();
         assert!(record_data.is_none());
     }
@@ -770,11 +795,10 @@ mod tests {
         page.slots[0].deleted = true;
 
         let mut rec_iterator = page.record_iterator();
-        let mut record_data = rec_iterator.next();              
+        let mut record_data = rec_iterator.next();
         assert!(matches!(record_data, Some(record) if record.data() == &[4, 5, 6]));
 
-        record_data = rec_iterator.next();              
+        record_data = rec_iterator.next();
         assert!(record_data.is_none());
     }
-
 }

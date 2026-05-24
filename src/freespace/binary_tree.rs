@@ -3,7 +3,10 @@
 // This implementation simplified and fills always the left most possible node. That's possible,
 // because the database is single threaded and it's not necessary to handle concurrent requests (in that case
 // it would be better not to favour the left most page to spread the locks across pages)
-use crate::{data::page::{self, PageDataLayout}, tree};
+use crate::{
+    data::page::{self, PageDataLayout},
+    tree,
+};
 
 pub struct BinaryTree {
     arr: Vec<u8>,
@@ -53,15 +56,19 @@ impl BinaryTree {
         let non_leaf_nodes = page_layout.page_size() / 2 - 1;
         let leaf_nodes = nodes - non_leaf_nodes;
 
-        NodeStructure { leaf_nodes, non_leaf_nodes, nodes }
+        NodeStructure {
+            leaf_nodes,
+            non_leaf_nodes,
+            nodes,
+        }
     }
 
     pub fn new(page_layout: &PageDataLayout) -> Self {
         let structure = BinaryTree::node_structure(page_layout);
 
         let arr = vec![0; structure.nodes];
-        Self { 
-            arr, 
+        Self {
+            arr,
             non_leaf_nodes: structure.non_leaf_nodes,
             leaf_nodes: structure.leaf_nodes,
         }
@@ -70,11 +77,13 @@ impl BinaryTree {
     pub fn deserialize(bytes: &[u8], page_layout: &PageDataLayout) -> Self {
         let max = bytes.iter().max();
         let mut tree = BinaryTree::new(page_layout);
-        
+
         if tree.arr.len() != bytes.len() {
-            panic!("Invalid byte array length for deserialization. PageLayout is maybe incompatible");
+            panic!(
+                "Invalid byte array length for deserialization. PageLayout is maybe incompatible"
+            );
         }
-        
+
         // this is overhead (ref directly into the page array would be nicer)
         tree.arr = bytes.to_vec();
 
@@ -109,19 +118,19 @@ impl BinaryTree {
                 current = right_child_index;
             } else {
                 // This should never be reached, otherwise the tree is corrupted
-                return None; 
+                return None;
             }
         }
 
         let slot = current - self.non_leaf_nodes;
 
-        Some(FsmSlot { 
+        Some(FsmSlot {
             slot_index: slot,
             available_space: self.arr[slot],
         })
     }
 
-    pub fn set_available_space(&mut self, slot: usize, available_space: u8) {        
+    pub fn set_available_space(&mut self, slot: usize, available_space: u8) {
         // assert slot < leaf nodes
         if self.leaf_nodes <= slot {
             // Proper error handling or should this actually never happen?
@@ -151,7 +160,7 @@ impl BinaryTree {
 
             if right_child_index < self.arr.len() {
                 // if right value is higher take that one
-                 new_value = new_value.max(self.arr[right_child_index]);
+                new_value = new_value.max(self.arr[right_child_index]);
             }
 
             let old_value = self.arr[node_number];
@@ -182,7 +191,10 @@ impl BinaryTree {
 
 #[cfg(test)]
 mod tests {
-    use crate::{data::page::PageDataLayout, freespace::binary_tree::{BinaryTree, left_child, parent, right_child}};
+    use crate::{
+        data::page::PageDataLayout,
+        freespace::binary_tree::{BinaryTree, left_child, parent, right_child},
+    };
 
     #[test]
     fn should_find_middle_leaf() {
@@ -258,7 +270,6 @@ mod tests {
         assert_eq!(slot.unwrap().slot_index, 40);
     }
 
-
     #[test]
     fn should_traverse_tree() {
         // nodes are named: 0, 1, 2, ...
@@ -279,5 +290,4 @@ mod tests {
         // parent of 1 is 0:
         assert_eq!(parent(1), 0);
     }
-
 }
